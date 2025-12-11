@@ -110,6 +110,7 @@ const ChatPage = () => {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ prompt: '', n_predict: 0 }),
+          signal: AbortSignal.timeout(1000), // 1초 타임아웃
         });
         
         if (response.status === 503) {
@@ -120,6 +121,10 @@ const ChatPage = () => {
         }
       } catch (error) {
         // 서버가 아직 시작되지 않았거나 연결 불가
+        // 타임아웃이나 네트워크 에러는 조용히 처리 (로그 출력 안 함)
+        if (error.name !== 'AbortError' && !error.message.includes('Failed to fetch')) {
+          // 다른 에러만 로깅
+        }
         // 에러가 발생해도 모델이 로딩 중일 수 있으므로 true로 설정하지 않음
         // (이미 다른 곳에서 설정되었을 수 있음)
       }
