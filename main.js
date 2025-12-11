@@ -154,20 +154,11 @@ function startLlamaServer(modelConfig) {
     const msg = data.toString();
     console.log(msg);
     sendLog('log-message', msg);
-    
-    // VRAM 사용량 파싱 (llama-server 로그에서 추출)
-    // 예: "llm_load_tensors: using Metal backend" 또는 "ggml_metal: allocated buffer" 등
-    // Metal 백엔드 사용 시 VRAM 정보가 로그에 포함될 수 있음
-    // 더 정확한 방법: llama-server의 /metrics 엔드포인트 사용 (구현 필요)
-    parseVRAMUsage(msg);
   });
   llamaServerProcess.stderr.on('data', (data) => {
     const msg = data.toString();
     console.error(msg);
     sendLog('log-message', `[STDERR] ${msg}`);
-    
-    // stderr에서도 VRAM 정보 파싱 시도
-    parseVRAMUsage(msg);
   });
   llamaServerProcess.on('close', (code) => {
     const msg = `llama-server process exited with code ${code}`;
