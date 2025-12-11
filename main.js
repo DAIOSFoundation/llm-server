@@ -6,17 +6,6 @@ const os = require('os');
 const http = require('http');
 const { promisify } = require('util');
 
-// Metal VRAM 모니터 모듈 로드 (macOS에서만)
-let metalVRAM = null;
-if (process.platform === 'darwin') {
-  try {
-    metalVRAM = require('./native');
-  } catch (error) {
-    console.warn('[Main] Failed to load Metal VRAM module:', error.message);
-    console.warn('[Main] Falling back to estimated VRAM usage');
-  }
-}
-
 const configPath = path.join(app.getPath('userData'), 'config.json');
 let llamaServerProcess = null;
 let mainWindow = null;
