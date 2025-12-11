@@ -336,22 +336,31 @@ app.whenReady().then(() => {
           }
           
           // VRAM 사용량: 별도로 계산
-          const vramTotalMatch = data.match(/llamacpp:vram_total_bytes\s+(\d+)/);
-          const vramUsedMatch = data.match(/llamacpp:vram_used_bytes\s+(\d+)/);
-          const vramFreeMatch = data.match(/llamacpp:vram_free_bytes\s+(\d+)/);
+          // 과학적 표기법도 지원하도록 수정 (예: 1.71799e+10)
+          const vramTotalMatch = data.match(/llamacpp:vram_total_bytes\s+([\d.e+\-]+)/);
+          const vramUsedMatch = data.match(/llamacpp:vram_used_bytes\s+([\d.e+\-]+)/);
+          const vramFreeMatch = data.match(/llamacpp:vram_free_bytes\s+([\d.e+\-]+)/);
+          
+          // 디버깅: 매칭 결과 확인
+          console.log('[Main] VRAM parsing - Total match:', vramTotalMatch ? vramTotalMatch[1] : 'null');
+          console.log('[Main] VRAM parsing - Used match:', vramUsedMatch ? vramUsedMatch[1] : 'null');
+          console.log('[Main] VRAM parsing - Free match:', vramFreeMatch ? vramFreeMatch[1] : 'null');
           
           if (vramTotalMatch && vramUsedMatch) {
-            cachedVramTotal = parseInt(vramTotalMatch[1], 10);
-            cachedVramUsed = parseInt(vramUsedMatch[1], 10);
+            cachedVramTotal = Math.round(parseFloat(vramTotalMatch[1]));
+            cachedVramUsed = Math.round(parseFloat(vramUsedMatch[1]));
+            console.log('[Main] VRAM parsed - Total:', cachedVramTotal, 'Used:', cachedVramUsed);
             if (cachedVramTotal > 0) {
               vramUsagePercent = (cachedVramUsed / cachedVramTotal) * 100;
               const logMsg = `[Main] VRAM from metrics: ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`;
               console.log(logMsg);
               sendLog('log-message', logMsg);
+            } else {
+              console.warn('[Main] VRAM total is 0 after parsing');
             }
           } else if (vramFreeMatch && vramTotalMatch) {
-            cachedVramTotal = parseInt(vramTotalMatch[1], 10);
-            const vramFree = parseInt(vramFreeMatch[1], 10);
+            cachedVramTotal = Math.round(parseFloat(vramTotalMatch[1]));
+            const vramFree = Math.round(parseFloat(vramFreeMatch[1]));
             cachedVramUsed = cachedVramTotal - vramFree;
             if (cachedVramTotal > 0) {
               vramUsagePercent = (cachedVramUsed / cachedVramTotal) * 100;
@@ -436,6 +445,9 @@ app.whenReady().then(() => {
           gpuUsage = Math.random() * 100;
         }
       }
+      
+      // 디버깅: 반환되는 값 확인
+      console.log('[Main] Returning metrics - vramTotal:', cachedVramTotal, 'vramUsed:', cachedVramUsed, 'vramUsage:', Math.round(vramUsagePercent));
       
       return {
         cpu: Math.round(cpuUsage),
