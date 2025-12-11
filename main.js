@@ -3,6 +3,8 @@ const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
 const os = require('os');
+const http = require('http');
+const { promisify } = require('util');
 
 // Metal VRAM 모니터 모듈 로드 (macOS에서만)
 let metalVRAM = null;
@@ -275,33 +277,62 @@ app.whenReady().then(() => {
       // GPU 사용량: VRAM 점유율로 계산
       let gpuUsage = 0;
       
-      // llama-server가 실행 중이면 모델 기반 추정값 사용
-      // (llama-server는 별도 프로세스이므로 Metal API로는 확인 불가)
-      if (llamaServerProcess && currentModelConfig) {
-        // 모델이 로드되어 있으면 추정값 사용
-        if (cachedVramTotal > 0) {
-          const estimatedVRAMUsed = estimateVRAMUsage();
-          if (estimatedVRAMUsed > 0) {
-            gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
-            cachedVramUsed = estimatedVRAMUsed;
-          } else {
-            gpuUsage = 0;
-          }
-        } else {
-          // VRAM 총량을 알 수 없으면 Metal API로 시도
-          if (metalVRAM && process.platform === 'darwin') {
+      // llama-server가 실행 중이면 /metrics 엔드포인트에서 VRAM 정보 가져오기
+      if (llamaServerProcess) {
+        try {
+          // 비동기로 metrics 가져오기 (캐시된 값 사용, 백그라운드에서 업데이트)
+          (async () => {
             try {
-              const vramInfo = metalVRAM.getVRAMInfo();
-              if (!vramInfo.error && vramInfo.total > 0) {
-                cachedVramTotal = vramInfo.total;
-                const estimatedVRAMUsed = estimateVRAMUsage();
-                if (estimatedVRAMUsed > 0) {
-                  gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
-                  cachedVramUsed = estimatedVRAMUsed;
-                }
+              const data = await new Promise((resolve, reject) => {
+                const req = http.get('http://localhost:8080/metrics', { timeout: 1000 }, (res) => {
+                  let data = '';
+                  res.on('data', (chunk) => { data += chunk; });
+                  res.on('end', () => resolve(data));
+                });
+                req.on('error', reject);
+                req.on('timeout', () => {
+                  req.destroy();
+                  reject(new Error('Timeout'));
+                });
+              });
+              
+              // Prometheus 형식 파싱
+              const vramTotalMatch = data.match(/llamacpp:vram_total_bytes\s+(\d+)/);
+              const vramUsedMatch = data.match(/llamacpp:vram_used_bytes\s+(\d+)/);
+              const vramFreeMatch = data.match(/llamacpp:vram_free_bytes\s+(\d+)/);
+              
+              if (vramTotalMatch && vramUsedMatch) {
+                cachedVramTotal = parseInt(vramTotalMatch[1], 10);
+                cachedVramUsed = parseInt(vramUsedMatch[1], 10);
+              } else if (vramFreeMatch && vramTotalMatch) {
+                cachedVramTotal = parseInt(vramTotalMatch[1], 10);
+                const vramFree = parseInt(vramFreeMatch[1], 10);
+                cachedVramUsed = cachedVramTotal - vramFree;
               }
             } catch (error) {
-              console.error('[Main] Error getting VRAM info from Metal:', error);
+              // 에러는 무시 (다음 호출에서 재시도)
+            }
+          })();
+          
+          // 캐시된 값 사용
+          if (cachedVramTotal > 0 && cachedVramUsed > 0) {
+            gpuUsage = (cachedVramUsed / cachedVramTotal) * 100;
+          } else if (cachedVramTotal > 0 && currentModelConfig) {
+            // 캐시된 값이 없으면 추정값 사용
+            const estimatedVRAMUsed = estimateVRAMUsage();
+            if (estimatedVRAMUsed > 0) {
+              gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
+              cachedVramUsed = estimatedVRAMUsed;
+            }
+          }
+        } catch (error) {
+          console.error('[Main] Error fetching metrics:', error);
+          // 에러 발생 시 추정값 사용
+          if (cachedVramTotal > 0 && currentModelConfig) {
+            const estimatedVRAMUsed = estimateVRAMUsage();
+            if (estimatedVRAMUsed > 0) {
+              gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
+              cachedVramUsed = estimatedVRAMUsed;
             }
           }
         }
@@ -317,15 +348,6 @@ app.whenReady().then(() => {
             }
           } catch (error) {
             console.error('[Main] Error getting VRAM info from Metal:', error);
-          }
-        }
-        
-        // Metal API 실패 시 추정값 사용
-        if (gpuUsage === 0 && cachedVramTotal > 0) {
-          const estimatedVRAMUsed = estimateVRAMUsage();
-          if (estimatedVRAMUsed > 0) {
-            gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
-            cachedVramUsed = estimatedVRAMUsed;
           }
         }
         
