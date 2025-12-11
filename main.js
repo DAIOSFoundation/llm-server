@@ -388,6 +388,11 @@ app.whenReady().then(() => {
             }
           } else {
             // VRAM 정보를 찾을 수 없음 - 추정값 사용
+            console.warn('[Main] VRAM metrics not found in /metrics response');
+            console.warn('[Main] Total match:', vramTotalMatch ? 'found' : 'null');
+            console.warn('[Main] Used match:', vramUsedMatch ? 'found' : 'null');
+            console.warn('[Main] Free match:', vramFreeMatch ? 'found' : 'null');
+            
             if (cachedVramTotal > 0 && currentModelConfig) {
               const estimatedVRAMUsed = estimateVRAMUsage();
               if (estimatedVRAMUsed > 0) {
@@ -396,21 +401,6 @@ app.whenReady().then(() => {
                 const logMsg = `[Main] Using estimated VRAM: ${(estimatedVRAMUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`;
                 console.log(logMsg);
                 sendLog('log-message', logMsg);
-              }
-            } else if (metalVRAM && process.platform === 'darwin') {
-              // Metal API로 시도
-              try {
-                const vramInfo = metalVRAM.getVRAMInfo();
-                if (!vramInfo.error && vramInfo.total > 0) {
-                  cachedVramTotal = vramInfo.total;
-                  cachedVramUsed = vramInfo.used;
-                  vramUsagePercent = (vramInfo.used / vramInfo.total) * 100;
-                  const logMsg = `[Main] Using Metal API VRAM: ${(vramInfo.used / 1024 / 1024 / 1024).toFixed(2)} GB / ${(vramInfo.total / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`;
-                  console.log(logMsg);
-                  sendLog('log-message', logMsg);
-                }
-              } catch (metalError) {
-                console.error('[Main] Metal API error:', metalError.message);
               }
             }
           }
@@ -435,22 +425,7 @@ app.whenReady().then(() => {
           // Metal API는 llama-server의 메모리를 보여주지 않으므로 사용하지 않음
         }
       } else {
-        // llama-server가 실행 중이 아니면 Metal API로 확인 (다른 앱의 Metal 사용량)
-        // 하지만 llama-server가 실행 중일 때는 사용하지 않음 (llama-server의 메모리를 보여주지 않으므로)
-        if (metalVRAM && process.platform === 'darwin' && !llamaServerProcess) {
-          try {
-            const vramInfo = metalVRAM.getVRAMInfo();
-            if (!vramInfo.error && vramInfo.total > 0) {
-              cachedVramTotal = vramInfo.total;
-              cachedVramUsed = vramInfo.used;
-              vramUsagePercent = (vramInfo.used / vramInfo.total) * 100;
-              console.log(`[Main] Using Metal API VRAM (no server): ${(vramInfo.used / 1024 / 1024 / 1024).toFixed(2)} GB / ${(vramInfo.total / 1024 / 1024 / 1024).toFixed(2)} GB`);
-            }
-          } catch (error) {
-            console.error('[Main] Error getting VRAM info from Metal:', error);
-          }
-        }
-        
+        // llama-server가 실행 중이 아니면 VRAM 정보 없음
         // GPU 사용량은 랜덤값 사용 (임시)
         if (gpuUsage === 0) {
           gpuUsage = Math.random() * 100;
