@@ -35,76 +35,9 @@ function initVRAMInfo() {
 }
 
 // VRAM 사용량 추정 (모델 크기와 GPU 레이어 수 기반)
-function estimateVRAMUsage() {
-  if (!currentModelConfig || !currentModelConfig.modelPath || cachedVramTotal === 0) {
-    return 0;
-  }
-
-  try {
-    // 모델 파일 크기 확인
-    const stats = fs.statSync(currentModelConfig.modelPath);
-    const modelSizeBytes = stats.size;
-    
-    // GPU 레이어 수 (0이면 CPU만 사용, VRAM 사용 없음)
-    const gpuLayers = currentModelConfig.gpuLayers || 0;
-    if (gpuLayers === 0) {
-      return 0; // CPU만 사용하면 VRAM 사용 없음
-    }
-    
-    // 더 정확한 VRAM 사용량 추정:
-    // GPU 레이어 수에 따라 모델의 일부가 VRAM에 로드됨
-    // 일반적으로 전체 레이어 수는 모델 크기로 추정:
-    // - 7B 모델: 약 32-40 레이어
-    // - 13B 모델: 약 40-48 레이어  
-    // - 70B 모델: 약 80 레이어
-    
-    // 모델 크기로 대략적인 전체 레이어 수 추정
-    const modelSizeGB = modelSizeBytes / (1024 * 1024 * 1024);
-    let estimatedTotalLayers = 32; // 기본값 (7B 모델 기준)
-    
-    if (modelSizeGB >= 60) {
-      estimatedTotalLayers = 80; // 70B 모델
-    } else if (modelSizeGB >= 20) {
-      estimatedTotalLayers = 48; // 13B 모델
-    } else if (modelSizeGB >= 10) {
-      estimatedTotalLayers = 40; // 7B 모델 (큰 버전)
-    } else if (modelSizeGB >= 4) {
-      estimatedTotalLayers = 32; // 7B 모델
-    } else {
-      estimatedTotalLayers = 24; // 작은 모델
-    }
-    
-    // GPU 레이어 비율에 따라 모델의 일부가 VRAM에 로드됨
-    // 레이어는 모델의 대부분을 차지하므로, GPU 레이어 비율이 높을수록 더 많은 모델 부분이 로드됨
-    const gpuLayerRatio = Math.min(gpuLayers / estimatedTotalLayers, 1.0);
-    
-    // 모델 크기 기반 추정 (양자화된 모델 기준)
-    // 레이어 외에도 임베딩, 출력 레이어 등이 있으므로 최소 30%는 항상 로드됨
-    // GPU 레이어 비율에 따라 추가로 로드됨
-    const baseModelVRAM = modelSizeBytes * 0.3; // 기본 30% (임베딩, 출력 레이어 등)
-    const layerModelVRAM = modelSizeBytes * 0.6 * gpuLayerRatio; // 레이어 부분 (60% * GPU 레이어 비율)
-    const estimatedModelVRAM = baseModelVRAM + layerModelVRAM;
-    
-    // KV 캐시 추정
-    // KV 캐시는 (hidden_size * num_layers * context_size * 2 * sizeof(float16)) 정도
-    // 간단한 추정: 모델 크기의 일부를 기반으로 추정
-    const contextSize = currentModelConfig.contextSize || 2048;
-    // GPU 레이어 수에 비례하여 KV 캐시도 증가
-    const kvCachePerLayer = (modelSizeBytes * 0.0005) * (contextSize / 2048); // 레이어당 KV 캐시
-    const estimatedKVCache = kvCachePerLayer * gpuLayers * 2; // key + value
-    
-    // 추가 오버헤드 (버퍼, 중간 활성화 등)
-    const overhead = modelSizeBytes * 0.15; // 모델 크기의 15% 오버헤드
-    
-    const totalEstimated = estimatedModelVRAM + estimatedKVCache + overhead;
-    
-    // 총 VRAM을 초과하지 않도록 제한
-    return Math.min(totalEstimated, cachedVramTotal * 0.95); // 최대 95%까지만
-  } catch (error) {
-    console.error('[Main] Failed to estimate VRAM usage:', error);
-    return 0;
-  }
-}
+// NOTE: 이전에는 모델 크기와 GPU 레이어 수를 기반으로 VRAM 사용량을 \"추정\"하는
+// estimateVRAMUsage() 함수를 사용했지만, 추정값이 실제 메트릭을 덮어쓰는 문제가 있어
+// 현재는 완전히 제거했습니다. 이제 VRAM 정보는 오직 llama-server 의 /metrics 응답만 사용합니다.
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -387,22 +320,11 @@ app.whenReady().then(() => {
               sendLog('log-message', logMsg);
             }
           } else {
-            // VRAM 정보를 찾을 수 없음 - 추정값 사용
+            // VRAM 정보를 찾을 수 없음 - 기존 캐시 값 유지
             console.warn('[Main] VRAM metrics not found in /metrics response');
             console.warn('[Main] Total match:', vramTotalMatch ? 'found' : 'null');
             console.warn('[Main] Used match:', vramUsedMatch ? 'found' : 'null');
             console.warn('[Main] Free match:', vramFreeMatch ? 'found' : 'null');
-            
-            if (cachedVramTotal > 0 && currentModelConfig) {
-              const estimatedVRAMUsed = estimateVRAMUsage();
-              if (estimatedVRAMUsed > 0) {
-                cachedVramUsed = estimatedVRAMUsed;
-                vramUsagePercent = (estimatedVRAMUsed / cachedVramTotal) * 100;
-                const logMsg = `[Main] Using estimated VRAM: ${(estimatedVRAMUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`;
-                console.log(logMsg);
-                sendLog('log-message', logMsg);
-              }
-            }
           }
         } catch (error) {
           const errorMsg = `[Main] Error fetching metrics: ${error.message}`;
@@ -413,16 +335,7 @@ app.whenReady().then(() => {
             gpuUsage = 50; // GPU 활성화되어 있으면 기본값
           }
           
-          // VRAM은 추정값 사용 (Metal API는 llama-server의 메모리를 보여주지 않으므로 사용 안 함)
-          if (cachedVramTotal > 0 && currentModelConfig) {
-            const estimatedVRAMUsed = estimateVRAMUsage();
-            if (estimatedVRAMUsed > 0) {
-              cachedVramUsed = estimatedVRAMUsed;
-              vramUsagePercent = (estimatedVRAMUsed / cachedVramTotal) * 100;
-              console.log(`[Main] Using estimated VRAM (fallback): ${(estimatedVRAMUsed / 1024 / 1024 / 1024).toFixed(2)} GB`);
-            }
-          }
-          // Metal API는 llama-server의 메모리를 보여주지 않으므로 사용하지 않음
+          // VRAM은 추정값이나 Metal API를 사용하지 않음. 이전에 성공적으로 파싱된 값이 있다면 그대로 유지.
         }
       } else {
         // llama-server가 실행 중이 아니면 VRAM 정보 없음

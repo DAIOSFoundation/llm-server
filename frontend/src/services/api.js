@@ -57,8 +57,8 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
     const promptTokens = await countTokens(prompt);
     const promptLength = prompt.length;
     
-    console.log(`[API] Prompt length: ${promptLength} chars, Actual tokens: ${promptTokens}, Context size: ${contextSize}`);
-    console.log(`[API] Token ratio: ${(promptLength / promptTokens).toFixed(2)} chars/token`);
+    // console.log(`[API] Prompt length: ${promptLength} chars, Actual tokens: ${promptTokens}, Context size: ${contextSize}`);
+    // console.log(`[API] Token ratio: ${(promptLength / promptTokens).toFixed(2)} chars/token`);
     pushServerLog('[API] Prompt tokens info', {
       promptLength,
       promptTokens,
@@ -67,14 +67,14 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
     });
     
     if (promptTokens > contextSize) {
-      console.error(`[API] Error: Actual tokens (${promptTokens}) exceeds context size (${contextSize})`);
+      // console.error(`[API] Error: Actual tokens (${promptTokens}) exceeds context size (${contextSize})`);
       pushServerLog('[API][STOP-DEBUG] Prompt exceeds context size', {
         promptTokens,
         contextSize,
       });
       throw new Error(`프롬프트가 컨텍스트 크기(${contextSize})를 초과합니다. (사용: ${promptTokens} 토큰) 대화를 초기화하거나 컨텍스트 크기를 늘려주세요.`);
     } else if (promptTokens > contextSize * 0.9) {
-      console.warn(`[API] Warning: Actual tokens (${promptTokens}) is close to context size (${contextSize})`);
+      // console.warn(`[API] Warning: Actual tokens (${promptTokens}) is close to context size (${contextSize})`);
       pushServerLog('[API][STOP-DEBUG] Prompt tokens close to context limit', {
         promptTokens,
         contextSize,
@@ -96,7 +96,7 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
       // 최소 32 토큰은 허용
       dynamicNPredict = Math.max(32, dynamicNPredict);
       
-      console.log(`[API] Dynamic n_predict: ${dynamicNPredict} (configMax=${maxTokensConfig}, remainingContext=${remainingContext}, maxByPrompt=${maxByPrompt}, maxByContext=${maxByContext})`);
+      // console.log(`[API] Dynamic n_predict: ${dynamicNPredict} (configMax=${maxTokensConfig}, remainingContext=${remainingContext}, maxByPrompt=${maxByPrompt}, maxByContext=${maxByContext})`);
       pushServerLog('[API] Dynamic n_predict calculated', {
         dynamicNPredict,
         configMax: maxTokensConfig,
@@ -106,7 +106,7 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
       });
     } else {
        // 무제한 모드 로그
-       console.log(`[API] Unlimited generation mode (n_predict=${maxTokensConfig}) - STOP via EOS/Context only`);
+       // console.log(`[API] Unlimited generation mode (n_predict=${maxTokensConfig}) - STOP via EOS/Context only`);
        pushServerLog('[API] Unlimited generation mode', {
          configMax: maxTokensConfig,
          contextSize,
@@ -142,7 +142,7 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
       return_tokens: showSpecialTokens
     };
 
-    console.log('[API] Request Payload:', JSON.stringify(payload, null, 2)); // 디버그용 Payload 로그 추가
+    // console.log('[API] Request Payload:', JSON.stringify(payload, null, 2)); // 디버그용 Payload 로그 추가
 
     const response = await fetch('http://localhost:8080/completion', {
       method: 'POST',
@@ -154,10 +154,10 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("[API] Server error:", errorText);
-      console.error("[API] Request payload size:", JSON.stringify(payload).length, "bytes");
-      console.error("[API] Prompt size:", prompt.length, "chars");
-      console.error("[API] Actual tokens:", promptTokens);
+      // console.error("[API] Server error:", errorText);
+      // console.error("[API] Request payload size:", JSON.stringify(payload).length, "bytes");
+      // console.error("[API] Prompt size:", prompt.length, "chars");
+      // console.error("[API] Actual tokens:", promptTokens);
       pushServerLog('[API] Server error response', {
         status: response.status,
         errorText,
@@ -176,7 +176,7 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
         const errorJson = JSON.parse(errorText);
         if (errorJson.error && errorJson.error.n_prompt_tokens) {
           const actualTokens = errorJson.error.n_prompt_tokens;
-          console.error(`[API] Server reported actual tokens: ${actualTokens}`);
+          // console.error(`[API] Server reported actual tokens: ${actualTokens}`);
           // 실제 토큰 수를 이벤트로 전달하여 UI 업데이트
           window.dispatchEvent(new CustomEvent('context-update', {
             detail: {
@@ -244,7 +244,7 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
 
               // 서버가 시퀀스를 잘랐다고 보고하는 경우 (컨텍스트 초과 등)
               if (parsed.truncated) {
-                console.warn('[API][STOP-DEBUG] Server reports truncated sequence:', parsed);
+                // console.warn('[API][STOP-DEBUG] Server reports truncated sequence:', parsed);
                 pushServerLog('[API][STOP-DEBUG] Server reports truncated sequence', {
                   truncated: parsed.truncated,
                   stop: parsed.stop,
@@ -269,9 +269,9 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
                   tokenCount,
                   durationMs: duration,
                 };
-                console.log('[API][STOP-DEBUG] Server sent stop signal:', stopInfo);
+                // console.log('[API][STOP-DEBUG] Server sent stop signal:', stopInfo);
                 pushServerLog('[API][STOP-DEBUG] Server sent stop signal', stopInfo);
-                console.log(`[API] Generation completed: ${tokenCount} tokens in ${duration}ms`);
+                // console.log(`[API] Generation completed: ${tokenCount} tokens in ${duration}ms`);
                 stoppedByServer = true;
                 return; // Stop processing further tokens
               }
@@ -295,7 +295,7 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
         stopArray: payload.stop,
         showSpecialTokens,
       };
-      console.warn('[API][STOP-DEBUG] Stream ended without explicit stop flag from server.', endInfo);
+      // console.warn('[API][STOP-DEBUG] Stream ended without explicit stop flag from server.', endInfo);
       pushServerLog('[API][STOP-DEBUG] Stream ended without explicit stop flag from server', endInfo);
     }
 
@@ -337,7 +337,7 @@ export const countTokens = async (prompt) => {
     // API 호출 실패 시 보수적인 추정값 사용 (조용히 처리)
     // AbortError나 네트워크 에러는 로그 출력 안 함
     if (error.name !== 'AbortError' && !error.message.includes('Failed to fetch')) {
-      console.warn('[API] Tokenize API error, using estimation:', error);
+      // console.warn('[API] Tokenize API error, using estimation:', error);
     }
     return Math.ceil(prompt.length / 2.0);
   }
@@ -360,7 +360,7 @@ export const tokenizeText = async (content) => {
     });
 
     if (!response.ok) {
-      console.warn('[API] Tokenize API (with_pieces) failed');
+      // console.warn('[API] Tokenize API (with_pieces) failed');
       return [];
     }
 
@@ -369,10 +369,10 @@ export const tokenizeText = async (content) => {
       return data.tokens;
     }
 
-    console.warn('[API] Unexpected tokenize (with_pieces) response format');
+    // console.warn('[API] Unexpected tokenize (with_pieces) response format');
     return [];
   } catch (error) {
-    console.warn('[API] Tokenize (with_pieces) error:', error);
+    // console.warn('[API] Tokenize (with_pieces) error:', error);
     return [];
   }
 };

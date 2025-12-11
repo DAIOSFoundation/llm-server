@@ -92,19 +92,19 @@ const PerformancePanel = () => {
           setGpuUsage(metrics.gpu || 0);
           
           // VRAM 사용량: 별도로 설정
-          console.log('[PerformancePanel] Received metrics:', {
-            vramTotal: metrics.vramTotal,
-            vramUsed: metrics.vramUsed,
-            vramUsage: metrics.vramUsage
-          });
+          // console.log('[PerformancePanel] Received metrics:', {
+          //   vramTotal: metrics.vramTotal,
+          //   vramUsed: metrics.vramUsed,
+          //   vramUsage: metrics.vramUsage
+          // });
           
           if (metrics.vramTotal) {
             setVramTotal(metrics.vramTotal);
-            console.log('[PerformancePanel] Set vramTotal:', metrics.vramTotal);
+            // console.log('[PerformancePanel] Set vramTotal:', metrics.vramTotal);
           }
           if (metrics.vramUsed !== undefined) {
             setVramUsed(metrics.vramUsed);
-            console.log('[PerformancePanel] Set vramUsed:', metrics.vramUsed);
+            // console.log('[PerformancePanel] Set vramUsed:', metrics.vramUsed);
           }
         } catch (error) {
           console.error('Failed to get system metrics:', error);
