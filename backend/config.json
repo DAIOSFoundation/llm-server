@@ -1,0 +1,15 @@
+{
+  "models": [],
+  "defaultModel": null,
+  "server": {
+    "port": 3001,
+    "host": "localhost"
+  },
+  "llama": {
+    "useGPU": true,
+    "gpuBackend": "auto",
+    "threads": 4,
+    "threadsBatch": 4
+  }
+}
+
