@@ -2,6 +2,7 @@
   "ko": {
     "header.settings": "설정",
     "header.login": "로그인",
+    "header.selectModel": "모델 선택",
     "settings.title": "모델 설정",
     "settings.inference": "기본 추론 설정",
     "settings.sampling": "샘플링",
@@ -21,6 +22,14 @@
     "settings.mirostatTau": "Mirostat Tau (목표 엔트로피)",
     "settings.mirostatEta": "Mirostat Eta (학습률)",
     "settings.save": "저장",
+    "settings.close": "닫기",
+    "settings.modelPath": "모델 경로",
+    "settings.findModel": "모델 찾기",
+    "settings.modelList": "모델 목록",
+    "settings.addNewModel": "새 모델 추가",
+    "settings.modelName": "모델 이름",
+    "settings.deleteModel": "삭제",
+    "settings.noModelSelected": "편집할 모델을 선택하거나 새 모델을 추가하세요.",
     "chat.send": "전송",
     "chat.placeholder": "메시지를 입력하세요...",
     "chat.welcome": "무엇을 도와드릴까요?",
@@ -31,6 +40,7 @@
   "en": {
     "header.settings": "Settings",
     "header.login": "Login",
+    "header.selectModel": "Select Model",
     "settings.title": "Model Settings",
     "settings.inference": "Basic Inference Settings",
     "settings.sampling": "Sampling",
@@ -50,6 +60,14 @@
     "settings.mirostatTau": "Mirostat Tau (Target Entropy)",
     "settings.mirostatEta": "Mirostat Eta (Learning Rate)",
     "settings.save": "Save",
+    "settings.close": "Close",
+    "settings.modelPath": "Model Path",
+    "settings.findModel": "Find Model",
+    "settings.modelList": "Model List",
+    "settings.addNewModel": "Add New Model",
+    "settings.modelName": "Model Name",
+    "settings.deleteModel": "Delete",
+    "settings.noModelSelected": "Select a model to edit, or add a new one.",
     "chat.send": "Send",
     "chat.placeholder": "Type a message...",
     "chat.welcome": "How can I help you?",
@@ -58,4 +76,3 @@
     "infoPanel.description": "The settings displayed here can be modified on the Settings page and will apply to the next chat."
   }
 }
-

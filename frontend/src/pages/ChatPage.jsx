@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { sendChatMessage } from '../services/api';
+import ProgressBar from '../components/ProgressBar';
+import ServerInfoPanel from '../components/ServerInfoPanel';
 import './ChatPage.css';
 
 const ChatPage = () => {
@@ -9,7 +11,6 @@ const ChatPage = () => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
-  const selectedModelId = localStorage.getItem('selectedModelId');
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -20,101 +21,86 @@ const ChatPage = () => {
   }, [messages]);
 
   const handleSend = async () => {
-    if (!input.trim() || !selectedModelId || isLoading) return;
+    if (input.trim() === '' || isLoading) return;
 
-    const userMessage = {
-      role: 'user',
-      content: input,
-      timestamp: Date.now()
-    };
-
-    setMessages(prev => [...prev, userMessage]);
+    const newUserMessage = { role: 'user', content: input, timestamp: Date.now() };
+    const currentMessages = [...messages, newUserMessage];
+    setMessages(currentMessages);
     setInput('');
     setIsLoading(true);
 
+    const assistantMessageId = Date.now() + 1;
+    setMessages(prev => [...prev, { role: 'assistant', content: '', timestamp: assistantMessageId }]);
+    
     try {
-      const chatMessages = [...messages, userMessage].map(msg => ({
-        role: msg.role,
-        content: msg.content
-      }));
-
-      const response = await sendChatMessage(selectedModelId, chatMessages, false);
-      
-      if (response.success) {
-        const assistantMessage = {
-          role: 'assistant',
-          content: response.content,
-          timestamp: Date.now()
-        };
-        setMessages(prev => [...prev, assistantMessage]);
-      } else {
-        throw new Error(response.error || '응답 생성 실패');
-      }
+      // The new API handles streaming internally via the onToken callback
+      await sendChatMessage(
+        currentMessages,
+        (token) => {
+          if (isLoading) setIsLoading(false); // Hide progress bar on first token
+          setMessages(prev =>
+            prev.map(msg =>
+              msg.timestamp === assistantMessageId
+                ? { ...msg, content: msg.content + token }
+                : msg
+            )
+          );
+        }
+      );
     } catch (error) {
       console.error('채팅 오류:', error);
-      const errorMessage = {
-        role: 'assistant',
-        content: `오류: ${error.message}`,
-        timestamp: Date.now()
-      };
-      setMessages(prev => [...prev, errorMessage]);
+       setMessages(prev =>
+        prev.map(msg =>
+          msg.timestamp === assistantMessageId
+            ? { ...msg, content: '오류가 발생했습니다. 다시 시도해주세요.' }
+            : msg
+        )
+      );
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
+    if (e.key === 'Enter') {
       handleSend();
     }
   };
 
   return (
-    <div className="chat-page">
-      <div className="chat-messages">
-        {messages.length === 0 && (
-          <div className="chat-empty">
-            <p>{t('chat.placeholder')}</p>
-          </div>
-        )}
-        {messages.map((message, index) => (
-          <div
-            key={index}
-            className={`chat-message ${message.role === 'user' ? 'user' : 'assistant'}`}
-          >
-            <div className="chat-message-content">
-              {message.content}
+    <div className="chat-page-container">
+      <div className="chat-page">
+        <ProgressBar loading={isLoading && messages[messages.length - 1]?.content === ''} />
+        <div className="chat-messages">
+          {messages.length === 0 && (
+            <div className="chat-empty">
+              <h1>BanyaLLM</h1>
+              <p>{t('chat.welcome')}</p>
             </div>
-          </div>
-        ))}
-        {isLoading && (
-          <div className="chat-message assistant">
-            <div className="chat-message-content">
-              {t('chat.loading')}
+          )}
+          {messages.map((msg) => (
+            <div key={msg.timestamp} className={`chat-bubble ${msg.role}`}>
+              <p>{msg.content}</p>
             </div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
+          ))}
+          <div ref={messagesEndRef} />
+        </div>
+        <div className="chat-input-container">
+          <input
+            type="text"
+            className="chat-input"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder={t('chat.placeholder')}
+            disabled={isLoading}
+          />
+          <button className="send-button" onClick={handleSend} disabled={isLoading}>
+            {t('chat.send')}
+          </button>
+        </div>
       </div>
-      <div className="chat-input-container">
-        <textarea
-          className="chat-input"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyPress={handleKeyPress}
-          placeholder={t('chat.placeholder')}
-          disabled={isLoading || !selectedModelId}
-          rows={1}
-        />
-        <button
-          className="chat-send-button"
-          onClick={handleSend}
-          disabled={!input.trim() || isLoading || !selectedModelId}
-        >
-          {t('chat.send')}
-        </button>
-      </div>
+      <ServerInfoPanel />
     </div>
   );
 };

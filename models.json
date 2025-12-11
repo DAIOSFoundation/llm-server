@@ -1,0 +1,26 @@
+[
+  {
+    "id": "1fd91a73-86f1-44f8-9504-2d3cad7df887",
+    "name": "banya-llama-kr-8b",
+    "path": "/Volumes/Transcend/Projects/BanyaLLM/BanyaLLM/llama31-banyaa-q4_k_m.gguf",
+    "quantization": "Q4_0",
+    "device": "MPS",
+    "gpuBackend": "",
+    "inferenceConfig": {
+      "contextSize": 2048,
+      "batchSize": 512,
+      "maxTokens": 100,
+      "temperature": 1,
+      "topK": 40,
+      "topP": 0.9,
+      "repeatPenalty": 1.2,
+      "repeatLastN": 59,
+      "threads": 4,
+      "threadsBatch": 4,
+      "seed": -1,
+      "stopSequences": []
+    },
+    "createdAt": "2025-12-11T01:42:12.904Z",
+    "updatedAt": "2025-12-11T02:21:37.977Z"
+  }
+]

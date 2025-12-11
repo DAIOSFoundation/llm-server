@@ -1,51 +1,105 @@
-.header {
+.app-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 2rem;
-  background-color: #ffffff;
-  border-bottom: 1px solid #e0e0e0;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  padding: 0 2rem;
+  height: 60px;
+  background-color: #1a1a1a;
+  border-bottom: 1px solid #333;
+  color: white;
+  flex-shrink: 0;
+}
+
+.header-left, .header-center, .header-right {
+  display: flex;
+  align-items: center;
 }
 
 .header-left {
-  display: flex;
-  align-items: center;
-  gap: 2rem;
+  flex: 1;
 }
 
-.header-title {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: #333;
+.header-center {
+  flex: 2;
+  justify-content: center;
 }
 
 .header-right {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
+  flex: 1;
+  justify-content: flex-end;
 }
 
-.header-button {
+.app-header h1 {
+  font-size: 1.5rem;
+  margin-right: 2rem;
+}
+
+.app-header nav {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border: none;
-  background: transparent;
-  border-radius: 8px;
+  gap: 1.5rem;
+}
+
+.app-header nav a {
+  color: #ccc;
+  text-decoration: none;
+  font-size: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 2px solid transparent;
+  transition: color 0.3s, border-color 0.3s;
+}
+
+.app-header nav a:hover {
+  color: white;
+}
+
+.app-header nav a.active {
+  color: white;
+  border-bottom: 2px solid #4CAF50;
+}
+
+/* Model Selector Dropdown Styles */
+.model-selector-dropdown {
+  position: relative;
+  min-width: 250px;
+  max-width: 400px;
+}
+
+.current-model-display {
+  background-color: #333;
+  color: white;
+  padding: 8px 15px;
+  border: 1px solid #555;
+  border-radius: 5px;
   cursor: pointer;
-  color: #666;
-  transition: all 0.2s;
+  width: 100%;
+  text-align: center;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
-.header-button:hover {
-  background-color: #f0f0f0;
-  color: #333;
+.dropdown-arrow {
+  font-size: 0.8em;
 }
 
-.header-button:active {
-  transform: scale(0.95);
+.model-dropdown-content {
+  position: absolute;
+  top: 110%;
+  left: 0;
+  right: 0;
+  background-color: #333;
+  border: 1px solid #555;
+  border-radius: 5px;
+  z-index: 1000;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
+.model-dropdown-item {
+  padding: 10px 15px;
+  cursor: pointer;
+}
+
+.model-dropdown-item:hover {
+  background-color: #4CAF50;
+}

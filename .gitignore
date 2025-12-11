@@ -11,6 +11,8 @@ build/
 *.a
 *.so
 *.dylib
+llama.cpp/build/
+llama.cpp/bin/
 
 # IDE
 .vscode/
@@ -38,4 +40,3 @@ models/
 tmp/
 temp/
 *.tmp
-

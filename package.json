@@ -1,0 +1,38 @@
+{
+  "name": "llm-server-desktop",
+  "version": "1.0.0",
+  "description": "Desktop wrapper for LLM Server UI",
+  "main": "main.js",
+  "scripts": {
+    "start": "concurrently \"npm run dev --prefix frontend\" \"wait-on http://localhost:5173 && electron .\"",
+    "build": "vite build --prefix frontend && electron-builder"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "electron": "^39.2.6",
+    "electron-builder": "^24.13.3",
+    "wait-on": "^9.0.3"
+  },
+  "build": {
+    "appId": "com.daios.llm-server",
+    "productName": "LLM Server",
+    "mac": {
+      "category": "public.app-category.developer-tools"
+    },
+    "files": [
+      "frontend/dist/**/*",
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "llama.cpp/build/bin/llama-server",
+        "to": "bin/llama-server"
+      }
+    ]
+  }
+}
