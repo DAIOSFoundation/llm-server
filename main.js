@@ -59,21 +59,52 @@ function estimateVRAMUsage() {
       return 0; // CPU만 사용하면 VRAM 사용 없음
     }
     
-    // 대략적인 추정:
-    // - 모델의 일부가 GPU로 오프로드됨 (gpuLayers에 비례)
-    // - KV 캐시도 VRAM 사용 (contextSize에 비례)
-    // - 실제로는 모델 크기의 30-50% 정도가 VRAM에 로드됨 (양자화에 따라 다름)
+    // 더 정확한 VRAM 사용량 추정:
+    // GPU 레이어 수에 따라 모델의 일부가 VRAM에 로드됨
+    // 일반적으로 전체 레이어 수는 모델 크기로 추정:
+    // - 7B 모델: 약 32-40 레이어
+    // - 13B 모델: 약 40-48 레이어  
+    // - 70B 모델: 약 80 레이어
     
-    // 간단한 추정: 모델 크기의 일부 + KV 캐시
-    // 실제로는 양자화 레벨, 모델 아키텍처 등에 따라 다르지만, 대략적인 추정
-    const estimatedModelVRAM = modelSizeBytes * 0.4; // 모델의 40% 정도가 VRAM에 로드된다고 가정
+    // 모델 크기로 대략적인 전체 레이어 수 추정
+    const modelSizeGB = modelSizeBytes / (1024 * 1024 * 1024);
+    let estimatedTotalLayers = 32; // 기본값 (7B 모델 기준)
     
-    // KV 캐시 추정 (매우 간단한 추정)
+    if (modelSizeGB >= 60) {
+      estimatedTotalLayers = 80; // 70B 모델
+    } else if (modelSizeGB >= 20) {
+      estimatedTotalLayers = 48; // 13B 모델
+    } else if (modelSizeGB >= 10) {
+      estimatedTotalLayers = 40; // 7B 모델 (큰 버전)
+    } else if (modelSizeGB >= 4) {
+      estimatedTotalLayers = 32; // 7B 모델
+    } else {
+      estimatedTotalLayers = 24; // 작은 모델
+    }
+    
+    // GPU 레이어 비율에 따라 모델의 일부가 VRAM에 로드됨
+    // 레이어는 모델의 대부분을 차지하므로, GPU 레이어 비율이 높을수록 더 많은 모델 부분이 로드됨
+    const gpuLayerRatio = Math.min(gpuLayers / estimatedTotalLayers, 1.0);
+    
+    // 모델 크기 기반 추정 (양자화된 모델 기준)
+    // 레이어 외에도 임베딩, 출력 레이어 등이 있으므로 최소 30%는 항상 로드됨
+    // GPU 레이어 비율에 따라 추가로 로드됨
+    const baseModelVRAM = modelSizeBytes * 0.3; // 기본 30% (임베딩, 출력 레이어 등)
+    const layerModelVRAM = modelSizeBytes * 0.6 * gpuLayerRatio; // 레이어 부분 (60% * GPU 레이어 비율)
+    const estimatedModelVRAM = baseModelVRAM + layerModelVRAM;
+    
+    // KV 캐시 추정
+    // KV 캐시는 (hidden_size * num_layers * context_size * 2 * sizeof(float16)) 정도
+    // 간단한 추정: 모델 크기의 일부를 기반으로 추정
     const contextSize = currentModelConfig.contextSize || 2048;
-    // 대략적으로 context당 1KB 정도 (실제로는 모델 크기에 비례)
-    const estimatedKVCache = contextSize * 1024 * 2; // 2배 여유
+    // GPU 레이어 수에 비례하여 KV 캐시도 증가
+    const kvCachePerLayer = (modelSizeBytes * 0.0005) * (contextSize / 2048); // 레이어당 KV 캐시
+    const estimatedKVCache = kvCachePerLayer * gpuLayers * 2; // key + value
     
-    const totalEstimated = estimatedModelVRAM + estimatedKVCache;
+    // 추가 오버헤드 (버퍼, 중간 활성화 등)
+    const overhead = modelSizeBytes * 0.15; // 모델 크기의 15% 오버헤드
+    
+    const totalEstimated = estimatedModelVRAM + estimatedKVCache + overhead;
     
     // 총 VRAM을 초과하지 않도록 제한
     return Math.min(totalEstimated, cachedVramTotal * 0.95); // 최대 95%까지만
@@ -244,37 +275,10 @@ app.whenReady().then(() => {
       // GPU 사용량: VRAM 점유율로 계산
       let gpuUsage = 0;
       
-      // Metal API를 사용하여 실제 VRAM 사용량 가져오기 (macOS)
-      if (metalVRAM && process.platform === 'darwin') {
-        try {
-          const vramInfo = metalVRAM.getVRAMInfo();
-          if (!vramInfo.error && vramInfo.total > 0) {
-            cachedVramTotal = vramInfo.total;
-            cachedVramUsed = vramInfo.used;
-            gpuUsage = (vramInfo.used / vramInfo.total) * 100;
-          } else {
-            // Metal API 실패 시 추정값 사용
-            if (cachedVramTotal > 0) {
-              const estimatedVRAMUsed = estimateVRAMUsage();
-              if (estimatedVRAMUsed > 0) {
-                gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
-                cachedVramUsed = estimatedVRAMUsed;
-              }
-            }
-          }
-        } catch (error) {
-          console.error('[Main] Error getting VRAM info from Metal:', error);
-          // 에러 발생 시 추정값 사용
-          if (cachedVramTotal > 0) {
-            const estimatedVRAMUsed = estimateVRAMUsage();
-            if (estimatedVRAMUsed > 0) {
-              gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
-              cachedVramUsed = estimatedVRAMUsed;
-            }
-          }
-        }
-      } else {
-        // Metal 모듈이 없거나 macOS가 아닌 경우 추정값 사용
+      // llama-server가 실행 중이면 모델 기반 추정값 사용
+      // (llama-server는 별도 프로세스이므로 Metal API로는 확인 불가)
+      if (llamaServerProcess && currentModelConfig) {
+        // 모델이 로드되어 있으면 추정값 사용
         if (cachedVramTotal > 0) {
           const estimatedVRAMUsed = estimateVRAMUsage();
           if (estimatedVRAMUsed > 0) {
@@ -284,7 +288,49 @@ app.whenReady().then(() => {
             gpuUsage = 0;
           }
         } else {
-          // VRAM 총량을 알 수 없으면 랜덤값 사용 (임시)
+          // VRAM 총량을 알 수 없으면 Metal API로 시도
+          if (metalVRAM && process.platform === 'darwin') {
+            try {
+              const vramInfo = metalVRAM.getVRAMInfo();
+              if (!vramInfo.error && vramInfo.total > 0) {
+                cachedVramTotal = vramInfo.total;
+                const estimatedVRAMUsed = estimateVRAMUsage();
+                if (estimatedVRAMUsed > 0) {
+                  gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
+                  cachedVramUsed = estimatedVRAMUsed;
+                }
+              }
+            } catch (error) {
+              console.error('[Main] Error getting VRAM info from Metal:', error);
+            }
+          }
+        }
+      } else {
+        // llama-server가 실행 중이 아니면 Metal API로 확인 (다른 앱의 Metal 사용량)
+        if (metalVRAM && process.platform === 'darwin') {
+          try {
+            const vramInfo = metalVRAM.getVRAMInfo();
+            if (!vramInfo.error && vramInfo.total > 0) {
+              cachedVramTotal = vramInfo.total;
+              cachedVramUsed = vramInfo.used;
+              gpuUsage = (vramInfo.used / vramInfo.total) * 100;
+            }
+          } catch (error) {
+            console.error('[Main] Error getting VRAM info from Metal:', error);
+          }
+        }
+        
+        // Metal API 실패 시 추정값 사용
+        if (gpuUsage === 0 && cachedVramTotal > 0) {
+          const estimatedVRAMUsed = estimateVRAMUsage();
+          if (estimatedVRAMUsed > 0) {
+            gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
+            cachedVramUsed = estimatedVRAMUsed;
+          }
+        }
+        
+        // 여전히 0이면 랜덤값 사용 (임시)
+        if (gpuUsage === 0 && cachedVramTotal === 0) {
           gpuUsage = Math.random() * 100;
         }
       }
