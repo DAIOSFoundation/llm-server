@@ -274,18 +274,27 @@ app.whenReady().then(() => {
       // CPU 사용량 (임시)
       const cpuUsage = Math.random() * 100; 
       
-      // GPU 사용량: VRAM 점유율로 계산
+      // GPU 사용량: 실제 GPU 처리량 (토큰 처리 속도 기반 또는 GPU 활성화 여부)
       let gpuUsage = 0;
       
-      // llama-server가 실행 중이면 /metrics 엔드포인트에서 VRAM 정보 가져오기
+      // VRAM 사용량: 별도로 계산 (GPU 사용량과 분리)
+      let vramUsagePercent = 0;
+      
+      // llama-server가 실행 중이면 /metrics 엔드포인트에서 정보 가져오기
       if (llamaServerProcess) {
         try {
-          // /metrics 엔드포인트에서 VRAM 정보 가져오기 (동기적으로 대기)
+          // /metrics 엔드포인트에서 정보 가져오기 (동기적으로 대기)
           const data = await new Promise((resolve, reject) => {
-            const req = http.get('http://localhost:8080/metrics', { timeout: 1000 }, (res) => {
+            const req = http.get('http://localhost:8080/metrics', { timeout: 2000 }, (res) => {
               let data = '';
               res.on('data', (chunk) => { data += chunk; });
-              res.on('end', () => resolve(data));
+              res.on('end', () => {
+                if (res.statusCode === 200) {
+                  resolve(data);
+                } else {
+                  reject(new Error(`HTTP ${res.statusCode}`));
+                }
+              });
             });
             req.on('error', reject);
             req.on('timeout', () => {
@@ -294,7 +303,18 @@ app.whenReady().then(() => {
             });
           });
           
-          // Prometheus 형식 파싱
+          // GPU 사용량: 토큰 처리 속도 기반 계산
+          const tokensPerSecondMatch = data.match(/llamacpp:predicted_tokens_seconds\s+([\d.]+)/);
+          if (tokensPerSecondMatch) {
+            const tokensPerSecond = parseFloat(tokensPerSecondMatch[1]);
+            // 토큰 처리 속도를 GPU 사용량으로 변환 (최대 100 tokens/s를 100%로 가정)
+            gpuUsage = Math.min((tokensPerSecond / 100) * 100, 100);
+          } else if (currentModelConfig && currentModelConfig.gpuLayers > 0) {
+            // GPU 레이어가 활성화되어 있으면 기본 사용량 표시
+            gpuUsage = 50; // GPU가 활성화되어 있으면 50%로 표시
+          }
+          
+          // VRAM 사용량: 별도로 계산
           const vramTotalMatch = data.match(/llamacpp:vram_total_bytes\s+(\d+)/);
           const vramUsedMatch = data.match(/llamacpp:vram_used_bytes\s+(\d+)/);
           const vramFreeMatch = data.match(/llamacpp:vram_free_bytes\s+(\d+)/);
@@ -303,41 +323,66 @@ app.whenReady().then(() => {
             cachedVramTotal = parseInt(vramTotalMatch[1], 10);
             cachedVramUsed = parseInt(vramUsedMatch[1], 10);
             if (cachedVramTotal > 0) {
-              gpuUsage = (cachedVramUsed / cachedVramTotal) * 100;
-              console.log(`[Main] VRAM from metrics: ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${gpuUsage.toFixed(1)}%)`);
+              vramUsagePercent = (cachedVramUsed / cachedVramTotal) * 100;
+              console.log(`[Main] VRAM from metrics: ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`);
             }
           } else if (vramFreeMatch && vramTotalMatch) {
             cachedVramTotal = parseInt(vramTotalMatch[1], 10);
             const vramFree = parseInt(vramFreeMatch[1], 10);
             cachedVramUsed = cachedVramTotal - vramFree;
             if (cachedVramTotal > 0) {
-              gpuUsage = (cachedVramUsed / cachedVramTotal) * 100;
-              console.log(`[Main] VRAM from metrics (calculated): ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${gpuUsage.toFixed(1)}%)`);
+              vramUsagePercent = (cachedVramUsed / cachedVramTotal) * 100;
+              console.log(`[Main] VRAM from metrics (calculated): ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`);
             }
           } else {
-            // VRAM 정보를 찾을 수 없음
-            console.warn('[Main] VRAM metrics not found in /metrics response');
+            // VRAM 정보를 찾을 수 없음 - 추정값 사용
             if (cachedVramTotal > 0 && currentModelConfig) {
               const estimatedVRAMUsed = estimateVRAMUsage();
               if (estimatedVRAMUsed > 0) {
-                gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
                 cachedVramUsed = estimatedVRAMUsed;
-                console.log(`[Main] Using estimated VRAM: ${(estimatedVRAMUsed / 1024 / 1024 / 1024).toFixed(2)} GB`);
+                vramUsagePercent = (estimatedVRAMUsed / cachedVramTotal) * 100;
+                console.log(`[Main] Using estimated VRAM: ${(estimatedVRAMUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`);
+              }
+            } else if (metalVRAM && process.platform === 'darwin') {
+              // Metal API로 시도
+              try {
+                const vramInfo = metalVRAM.getVRAMInfo();
+                if (!vramInfo.error && vramInfo.total > 0) {
+                  cachedVramTotal = vramInfo.total;
+                  cachedVramUsed = vramInfo.used;
+                  vramUsagePercent = (vramInfo.used / vramInfo.total) * 100;
+                  console.log(`[Main] Using Metal API VRAM: ${(vramInfo.used / 1024 / 1024 / 1024).toFixed(2)} GB / ${(vramInfo.total / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`);
+                }
+              } catch (metalError) {
+                console.error('[Main] Metal API error:', metalError.message);
               }
             }
           }
         } catch (error) {
           console.error('[Main] Error fetching metrics:', error.message);
-          // 에러 발생 시 추정값 사용
+          // 에러 발생 시 기본값 사용
+          if (currentModelConfig && currentModelConfig.gpuLayers > 0) {
+            gpuUsage = 50; // GPU 활성화되어 있으면 기본값
+          }
+          
+          // VRAM은 추정값 또는 Metal API 사용
           if (cachedVramTotal > 0 && currentModelConfig) {
             const estimatedVRAMUsed = estimateVRAMUsage();
             if (estimatedVRAMUsed > 0) {
-              gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
               cachedVramUsed = estimatedVRAMUsed;
+              vramUsagePercent = (estimatedVRAMUsed / cachedVramTotal) * 100;
             }
-          } else {
-            // VRAM 정보를 가져올 수 없으면 0으로 설정
-            gpuUsage = 0;
+          } else if (metalVRAM && process.platform === 'darwin') {
+            try {
+              const vramInfo = metalVRAM.getVRAMInfo();
+              if (!vramInfo.error && vramInfo.total > 0) {
+                cachedVramTotal = vramInfo.total;
+                cachedVramUsed = vramInfo.used;
+                vramUsagePercent = (vramInfo.used / vramInfo.total) * 100;
+              }
+            } catch (metalError) {
+              console.error('[Main] Metal API error (fallback):', metalError.message);
+            }
           }
         }
       } else {
@@ -348,28 +393,29 @@ app.whenReady().then(() => {
             if (!vramInfo.error && vramInfo.total > 0) {
               cachedVramTotal = vramInfo.total;
               cachedVramUsed = vramInfo.used;
-              gpuUsage = (vramInfo.used / vramInfo.total) * 100;
+              vramUsagePercent = (vramInfo.used / vramInfo.total) * 100;
             }
           } catch (error) {
             console.error('[Main] Error getting VRAM info from Metal:', error);
           }
         }
         
-        // 여전히 0이면 랜덤값 사용 (임시)
-        if (gpuUsage === 0 && cachedVramTotal === 0) {
+        // GPU 사용량은 랜덤값 사용 (임시)
+        if (gpuUsage === 0) {
           gpuUsage = Math.random() * 100;
         }
       }
       
       return {
         cpu: Math.round(cpuUsage),
-        gpu: Math.round(gpuUsage),
+        gpu: Math.round(gpuUsage), // GPU 사용량 (처리량 기반)
         memory: Math.round(memoryUsagePercent),
         totalMemory: totalMemory,
         usedMemory: usedMemory,
         freeMemory: freeMemory,
         vramTotal: cachedVramTotal, // VRAM 총량
-        vramUsed: cachedVramUsed // VRAM 사용량 (추정값)
+        vramUsed: cachedVramUsed, // VRAM 사용량
+        vramUsage: Math.round(vramUsagePercent) // VRAM 점유율 (%)
       };
     } catch (error) {
       console.error('Failed to get system metrics:', error);

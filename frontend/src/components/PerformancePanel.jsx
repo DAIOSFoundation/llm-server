@@ -87,17 +87,13 @@ const PerformancePanel = () => {
           const metrics = await window.electronAPI.getSystemMetrics();
           setCpuUsage(metrics.cpu || 0);
           setMemoryUsage(metrics.memory || 0);
+          
+          // GPU 사용량: 실제 GPU 처리량 (기존 방식 유지)
+          setGpuUsage(metrics.gpu || 0);
+          
+          // VRAM 사용량: 별도로 설정
           if (metrics.vramTotal) setVramTotal(metrics.vramTotal);
           if (metrics.vramUsed !== undefined) setVramUsed(metrics.vramUsed);
-          
-          // GPU Load는 VRAM 점유율로 표시
-          if (metrics.vramTotal > 0 && metrics.vramUsed !== undefined) {
-            const vramUsagePercent = (metrics.vramUsed / metrics.vramTotal) * 100;
-            setGpuUsage(vramUsagePercent);
-          } else {
-            // VRAM 정보가 없으면 기존 방식 사용 (랜덤값)
-            setGpuUsage(metrics.gpu || 0);
-          }
         } catch (error) {
           console.error('Failed to get system metrics:', error);
           // Fallback to mock data
@@ -297,13 +293,15 @@ const PerformancePanel = () => {
               <div 
                 className="memory-bar" 
                 style={{ 
-                  width: `${gpuUsage}%`,
-                  background: gpuUsage <= 50 
+                  width: `${vramTotal > 0 && vramUsed !== undefined ? (vramUsed / vramTotal) * 100 : 0}%`,
+                  background: (vramTotal > 0 && vramUsed !== undefined ? (vramUsed / vramTotal) * 100 : 0) <= 50 
                     ? '#4CAF50' 
                     : 'linear-gradient(90deg, rgb(0, 100, 255), rgb(255, 255, 0), rgb(255, 0, 0))'
                 }}
               />
-              <span className="bar-value">{Math.round(gpuUsage)}%</span>
+              <span className="bar-value">
+                {vramTotal > 0 && vramUsed !== undefined ? Math.round((vramUsed / vramTotal) * 100) : 0}%
+              </span>
             </div>
           </div>
         </div>
