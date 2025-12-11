@@ -8,6 +8,8 @@ const configPath = path.join(app.getPath('userData'), 'config.json');
 let llamaServerProcess = null;
 let mainWindow = null;
 let cachedVramTotal = 0; // VRAM 용량 캐싱
+let cachedVramUsed = 0; // VRAM 사용량 (바이트)
+let currentModelConfig = null; // 현재 로드된 모델 설정
 
 // macOS VRAM 정보 가져오기
 function initVRAMInfo() {
@@ -26,6 +28,47 @@ function initVRAMInfo() {
         console.log(`[Main] Detected VRAM: ${(cachedVramTotal / 1024 / 1024).toFixed(0)} MB`);
       }
     });
+  }
+}
+
+// VRAM 사용량 추정 (모델 크기와 GPU 레이어 수 기반)
+function estimateVRAMUsage() {
+  if (!currentModelConfig || !currentModelConfig.modelPath || cachedVramTotal === 0) {
+    return 0;
+  }
+
+  try {
+    // 모델 파일 크기 확인
+    const stats = fs.statSync(currentModelConfig.modelPath);
+    const modelSizeBytes = stats.size;
+    
+    // GPU 레이어 수 (0이면 CPU만 사용, VRAM 사용 없음)
+    const gpuLayers = currentModelConfig.gpuLayers || 0;
+    if (gpuLayers === 0) {
+      return 0; // CPU만 사용하면 VRAM 사용 없음
+    }
+    
+    // 대략적인 추정:
+    // - 모델의 일부가 GPU로 오프로드됨 (gpuLayers에 비례)
+    // - KV 캐시도 VRAM 사용 (contextSize에 비례)
+    // - 실제로는 모델 크기의 30-50% 정도가 VRAM에 로드됨 (양자화에 따라 다름)
+    
+    // 간단한 추정: 모델 크기의 일부 + KV 캐시
+    // 실제로는 양자화 레벨, 모델 아키텍처 등에 따라 다르지만, 대략적인 추정
+    const estimatedModelVRAM = modelSizeBytes * 0.4; // 모델의 40% 정도가 VRAM에 로드된다고 가정
+    
+    // KV 캐시 추정 (매우 간단한 추정)
+    const contextSize = currentModelConfig.contextSize || 2048;
+    // 대략적으로 context당 1KB 정도 (실제로는 모델 크기에 비례)
+    const estimatedKVCache = contextSize * 1024 * 2; // 2배 여유
+    
+    const totalEstimated = estimatedModelVRAM + estimatedKVCache;
+    
+    // 총 VRAM을 초과하지 않도록 제한
+    return Math.min(totalEstimated, cachedVramTotal * 0.95); // 최대 95%까지만
+  } catch (error) {
+    console.error('[Main] Failed to estimate VRAM usage:', error);
+    return 0;
   }
 }
 
@@ -72,6 +115,7 @@ function startLlamaServer(modelConfig) {
     llamaServerProcess.kill();
   }
 
+  currentModelConfig = modelConfig; // 현재 모델 설정 저장
   const { modelPath, contextSize, gpuLayers, frequencyPenalty, presencePenalty } = modelConfig;
 
   if (!modelPath || !fs.existsSync(modelPath)) {
@@ -110,17 +154,28 @@ function startLlamaServer(modelConfig) {
     const msg = data.toString();
     console.log(msg);
     sendLog('log-message', msg);
+    
+    // VRAM 사용량 파싱 (llama-server 로그에서 추출)
+    // 예: "llm_load_tensors: using Metal backend" 또는 "ggml_metal: allocated buffer" 등
+    // Metal 백엔드 사용 시 VRAM 정보가 로그에 포함될 수 있음
+    // 더 정확한 방법: llama-server의 /metrics 엔드포인트 사용 (구현 필요)
+    parseVRAMUsage(msg);
   });
   llamaServerProcess.stderr.on('data', (data) => {
     const msg = data.toString();
     console.error(msg);
     sendLog('log-message', `[STDERR] ${msg}`);
+    
+    // stderr에서도 VRAM 정보 파싱 시도
+    parseVRAMUsage(msg);
   });
   llamaServerProcess.on('close', (code) => {
     const msg = `llama-server process exited with code ${code}`;
     console.log(msg);
     sendLog('log-message', `[INFO] ${msg}`);
     llamaServerProcess = null;
+    currentModelConfig = null; // 모델 설정 초기화
+    cachedVramUsed = 0; // VRAM 사용량 초기화
   });
 }
 
@@ -183,9 +238,23 @@ app.whenReady().then(() => {
       
       // CPU 사용량 (임시)
       const cpuUsage = Math.random() * 100; 
-      // GPU 사용량 (VRAM이 감지되었으면, 메모리 사용률을 GPU 부하의 대략적인 지표로 활용하거나 별도 로직 필요)
-      // 현재는 VRAM Total만 정확하므로, GPU Load는 임시 랜덤값 유지 또는 추후 llama-server 상태 연동 필요
-      const gpuUsage = Math.random() * 100;
+      
+      // GPU 사용량: VRAM 점유율로 계산
+      let gpuUsage = 0;
+      if (cachedVramTotal > 0) {
+        // VRAM 사용량 추정
+        const estimatedVRAMUsed = estimateVRAMUsage();
+        if (estimatedVRAMUsed > 0) {
+          gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
+          cachedVramUsed = estimatedVRAMUsed; // 캐시 업데이트
+        } else {
+          // 모델이 로드되지 않았거나 GPU 레이어가 0이면 0%
+          gpuUsage = 0;
+        }
+      } else {
+        // VRAM 총량을 알 수 없으면 랜덤값 사용 (임시)
+        gpuUsage = Math.random() * 100;
+      }
       
       return {
         cpu: Math.round(cpuUsage),
@@ -194,7 +263,8 @@ app.whenReady().then(() => {
         totalMemory: totalMemory,
         usedMemory: usedMemory,
         freeMemory: freeMemory,
-        vramTotal: cachedVramTotal // VRAM 정보 추가
+        vramTotal: cachedVramTotal, // VRAM 총량
+        vramUsed: cachedVramUsed // VRAM 사용량 (추정값)
       };
     } catch (error) {
       console.error('Failed to get system metrics:', error);

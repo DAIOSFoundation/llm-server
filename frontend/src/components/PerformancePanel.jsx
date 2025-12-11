@@ -6,7 +6,8 @@ const PerformancePanel = () => {
   const [cpuUsage, setCpuUsage] = useState(0);
   const [gpuUsage, setGpuUsage] = useState(0);
   const [memoryUsage, setMemoryUsage] = useState(0);
-  const [vramTotal, setVramTotal] = useState(0); // VRAM 정보 추가
+  const [vramTotal, setVramTotal] = useState(0); // VRAM 총량
+  const [vramUsed, setVramUsed] = useState(0); // VRAM 사용량
   const [contextUsage, setContextUsage] = useState(0);
   const [contextUsed, setContextUsed] = useState(0);
   const [contextSize, setContextSize] = useState(2048);
@@ -85,9 +86,18 @@ const PerformancePanel = () => {
         try {
           const metrics = await window.electronAPI.getSystemMetrics();
           setCpuUsage(metrics.cpu || 0);
-          setGpuUsage(metrics.gpu || 0);
           setMemoryUsage(metrics.memory || 0);
           if (metrics.vramTotal) setVramTotal(metrics.vramTotal);
+          if (metrics.vramUsed !== undefined) setVramUsed(metrics.vramUsed);
+          
+          // GPU Load는 VRAM 점유율로 표시
+          if (metrics.vramTotal > 0 && metrics.vramUsed !== undefined) {
+            const vramUsagePercent = (metrics.vramUsed / metrics.vramTotal) * 100;
+            setGpuUsage(vramUsagePercent);
+          } else {
+            // VRAM 정보가 없으면 기존 방식 사용 (랜덤값)
+            setGpuUsage(metrics.gpu || 0);
+          }
         } catch (error) {
           console.error('Failed to get system metrics:', error);
           // Fallback to mock data
@@ -273,11 +283,15 @@ const PerformancePanel = () => {
             </div>
           </div>
           
-          {/* GPU Usage (Load) */}
+          {/* GPU Usage (VRAM 점유율) */}
           <div className="memory-row" style={{ marginTop: '5px' }}>
             <div className="memory-label-small">
-              GPU Load
-              {vramTotal > 0 && <span style={{ fontSize: '0.7em', display: 'block', fontWeight: 'normal' }}>({(vramTotal / 1024 / 1024 / 1024).toFixed(1)} GB)</span>}
+              GPU Load (VRAM)
+              {vramTotal > 0 && (
+                <span style={{ fontSize: '0.7em', display: 'block', fontWeight: 'normal' }}>
+                  ({(vramUsed / 1024 / 1024 / 1024).toFixed(1)} / {(vramTotal / 1024 / 1024 / 1024).toFixed(1)} GB)
+                </span>
+              )}
             </div>
             <div className="memory-bar-container small">
               <div 
