@@ -341,9 +341,23 @@ app.whenReady().then(() => {
           
           // VRAM 사용량: 별도로 계산
           // 과학적 표기법도 지원하도록 수정 (예: 1.71799e+10)
-          const vramTotalMatch = data.match(/llamacpp:vram_total_bytes\s+([\d.e+\-]+)/);
-          const vramUsedMatch = data.match(/llamacpp:vram_used_bytes\s+([\d.e+\-]+)/);
-          const vramFreeMatch = data.match(/llamacpp:vram_free_bytes\s+([\d.e+\-]+)/);
+          // 정규식 수정: 줄바꿈을 고려하여 각 줄을 개별적으로 매칭
+          const lines = data.split('\n');
+          let vramTotalMatch = null;
+          let vramUsedMatch = null;
+          let vramFreeMatch = null;
+          
+          for (const line of lines) {
+            if (!vramTotalMatch && line.includes('vram_total_bytes') && !line.startsWith('#')) {
+              vramTotalMatch = line.match(/llamacpp:vram_total_bytes\s+([\d.e+\-]+)/);
+            }
+            if (!vramUsedMatch && line.includes('vram_used_bytes') && !line.startsWith('#')) {
+              vramUsedMatch = line.match(/llamacpp:vram_used_bytes\s+([\d.e+\-]+)/);
+            }
+            if (!vramFreeMatch && line.includes('vram_free_bytes') && !line.startsWith('#')) {
+              vramFreeMatch = line.match(/llamacpp:vram_free_bytes\s+([\d.e+\-]+)/);
+            }
+          }
           
           // 디버깅: 매칭 결과 확인
           console.log('[Main] VRAM parsing - Total match:', vramTotalMatch ? vramTotalMatch[1] : 'null');
