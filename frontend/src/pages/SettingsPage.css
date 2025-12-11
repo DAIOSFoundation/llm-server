@@ -103,6 +103,84 @@
   font-size: 1.2rem;
 }
 
+/* Descriptions Section Styles */
+.descriptions-section {
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid #333;
+}
+
+.descriptions-section h3 {
+  color: #eee;
+  margin-bottom: 1.5rem;
+}
+
+.descriptions-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  padding: 0.5rem;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.descriptions-header:hover {
+  background-color: #333;
+}
+
+.expand-icon {
+  font-size: 0.8rem;
+  transition: transform 0.3s ease;
+  color: #4CAF50;
+}
+
+.expand-icon.expanded {
+  transform: rotate(180deg);
+}
+
+.descriptions-grid {
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.descriptions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+.description-card {
+  background-color: #2a2a2a;
+  padding: 1.5rem;
+  border-radius: 8px;
+  border: 1px solid #333;
+}
+
+.description-card h4 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  color: #4CAF50;
+}
+
+.description-card p {
+  margin: 0;
+  color: #ccc;
+  line-height: 1.6;
+}
+
+
 .settings-footer {
   grid-area: footer;
   display: flex;

@@ -50,6 +50,57 @@
   margin-bottom: 0;
 }
 
+.form-group.toggle-group {
+  flex-direction: row;
+  align-items: center;
+  gap: 15px;
+}
+
+.form-group.toggle-group label {
+  margin-bottom: 0;
+}
+
+.toggle-button {
+  position: relative;
+  width: 50px;
+  height: 26px;
+  background-color: #555;
+  border: none;
+  border-radius: 13px;
+  cursor: pointer;
+  transition: background-color 0.3s;
+  padding: 0;
+  outline: none;
+}
+
+.toggle-button:hover {
+  background-color: #666;
+}
+
+.toggle-button.active {
+  background-color: #4CAF50;
+}
+
+.toggle-button.active:hover {
+  background-color: #45a049;
+}
+
+.toggle-slider {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  background-color: white;
+  border-radius: 50%;
+  transition: transform 0.3s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-button.active .toggle-slider {
+  transform: translateX(24px);
+}
+
 /* Input, Select, and Textarea Styles */
 .model-form input[type="text"],
 .model-form input[type="number"],

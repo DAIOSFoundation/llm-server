@@ -32,6 +32,15 @@ llm-server/
 -   **Node.js:** v18 이상 설치
 -   **C++ 컴파일러:** macOS의 경우 Xcode Command Line Tools, Windows의 경우 Visual Studio, Linux의 경우 `build-essential` 등이 필요합니다.
 
+### Linux 환경 추가 요구사항
+
+리눅스에서 빌드하려면 `cmake`와 컴파일러가 필요합니다. (Ubuntu/Debian 기준)
+
+```bash
+sudo apt update
+sudo apt install build-essential cmake
+```
+
 ### 2. 의존성 설치
 
 프로젝트 루트 디렉터리에서 `frontend`와 루트의 `node_modules`를 모두 설치합니다.
@@ -91,3 +100,36 @@ npm run build
 2.  `electron-builder`가 `llama-server` 바이너리 파일과 빌드된 React 앱을 포함하여 설치 패키지를 생성합니다.
 
 빌드가 완료되면 프로젝트 루트에 `dist` 폴더가 생성되고, 그 안에 최종 설치 파일이 만들어집니다.
+
+## 설정 파일 (config.json) 안내
+
+이 애플리케이션은 사용자가 생성한 모델 설정과 마지막으로 선택한 모델 정보를 `config.json` 파일에 저장합니다.
+
+### 1. 설정 파일 위치
+
+운영체제별로 설정 파일의 기본 저장 경로는 다음과 같습니다. (Electron의 `userData` 경로)
+
+- **macOS:**
+  - `~/Library/Application Support/llm-server/config.json`
+  - (개발 모드 실행 시: `~/Library/Application Support/Electron/config.json`)
+- **Windows:**
+  - `%APPDATA%\llm-server\config.json`
+  - (개발 모드 실행 시: `%APPDATA%\Electron\config.json`)
+- **Linux:**
+  - `~/.config/llm-server/config.json`
+  - (개발 모드 실행 시: `~/.config/Electron/config.json`)
+
+### 2. 설정 방법
+
+**방법 A: 애플리케이션 UI 사용 (권장)**
+앱 내의 **'설정 (Settings)'** 페이지에서 모델을 추가하고 파라미터를 수정하는 것을 권장합니다. 저장 버튼을 누르면 `config.json` 파일이 자동으로 업데이트됩니다.
+
+**방법 B: config.json 직접 수정**
+앱을 종료한 상태에서 `config.json` 파일을 텍스트 에디터로 열어 직접 수정할 수 있습니다.
+JSON 형식이 깨지지 않도록 주의해야 합니다.
+
+**주요 설정값 예시:**
+- `maxTokens` (n_predict): 한 번에 생성할 최대 토큰 수 (예: 256, 512). 너무 크면 문장이 안 끝나고 횡설수설할 수 있습니다.
+- `repeatPenalty`: 반복 억제 강도 (기본: 1.1). 값이 클수록 반복을 강하게 막습니다.
+- `dryMultiplier`: DRY(Do Not Repeat Yourself) 샘플링 강도. 0.8 정도로 설정하면 반복을 매우 강력하게 차단합니다.
+

@@ -1,0 +1,186 @@
+.performance-panel {
+  padding: 1rem;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.performance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.5rem;
+}
+
+.performance-item {
+  background-color: #252525;
+  border-radius: 8px;
+  /* 상단 여백은 최소화하고 좌우/하단만 유지 */
+  padding: 0.4rem 1rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #333;
+}
+
+.gauge-container {
+  position: relative;
+  width: 100%;
+  /* 카드 안에서 게이지를 최대한 크게 사용 */
+  height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gauge-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.gauge-label {
+  position: absolute;
+  bottom: 6px;
+  text-align: center;
+}
+
+.gauge-value {
+  font-size: 1.1rem;     /* 조금 더 kompact 하게 */
+  font-weight: bold;
+  color: #4CAF50;
+}
+
+.gauge-name {
+  font-size: 0.8rem;
+  color: #888;
+  margin-top: 0.15rem;
+}
+
+.memory-item {
+  grid-column: span 2;
+  align-items: stretch; /* 아이템들을 가로로 꽉 차게 */
+  padding: 0.8rem 1rem;
+}
+
+.memory-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.memory-label-small {
+  font-size: 0.85rem;
+  color: #ccc;
+  font-weight: bold;
+  width: 110px; /* 라벨 너비 고정 */
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.memory-bar-container.small {
+  height: 15px; /* 높이 절반 */
+  border-radius: 7.5px;
+}
+
+.memory-bar-container.small .memory-bar {
+  border-radius: 7.5px;
+}
+
+.memory-bar-container.small .bar-value {
+  font-size: 0.75rem; /* 폰트 크기 축소 */
+}
+
+.context-item {
+  grid-column: span 2;
+}
+
+/* 기존 memory-label 삭제 또는 유지 (Context Windows에서 사용 중) */
+.memory-label {
+  font-size: 1rem;
+  color: #ccc;
+  margin-bottom: 1rem;
+  font-weight: bold;
+}
+
+.memory-bar-container {
+  width: 100%;
+  height: 30px;
+  background-color: #333;
+  border-radius: 15px;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.bar-value {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: bold;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.memory-bar {
+  height: 100%;
+  transition: width 0.3s ease, background 0.3s ease;
+  border-radius: 15px;
+}
+
+.memory-value {
+  margin-top: 0.5rem;
+  font-size: 1.2rem;
+  color: #4CAF50;
+  font-weight: bold;
+}
+
+.token-speed-item {
+  grid-column: span 2;
+}
+
+.token-debug-item {
+  grid-column: span 2;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 0;
+}
+
+.token-speed-label {
+  font-size: 1rem;
+  color: #ccc;
+  margin-bottom: 0.5rem;
+  font-weight: bold;
+}
+
+.token-speed-value {
+  font-size: 1.2rem;
+  color: #4CAF50;
+  font-weight: bold;
+  margin-bottom: 0.5rem;
+}
+
+.token-lamps-container {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 0.25rem;
+}
+
+.token-lamp {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background-color: #333;
+  border: 2px solid #555;
+  transition: all 0.2s ease;
+}
+
+.token-lamp.active {
+  /* 색상은 인라인 스타일로 동적 적용 */
+  transition: all 0.2s ease;
+}
