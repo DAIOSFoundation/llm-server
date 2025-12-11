@@ -324,6 +324,10 @@ app.whenReady().then(() => {
             });
           });
           
+          // 디버깅: 받은 데이터 확인
+          const vramLines = data.split('\n').filter(line => line.includes('vram') && !line.startsWith('#'));
+          console.log('[Main] VRAM lines from /metrics:', vramLines);
+          
           // GPU 사용량: 토큰 처리 속도 기반 계산
           const tokensPerSecondMatch = data.match(/llamacpp:predicted_tokens_seconds\s+([\d.]+)/);
           if (tokensPerSecondMatch) {
