@@ -182,7 +182,7 @@ function startLlamaServer(modelConfig) {
     return;
   }
   
-  const args = ['-m', modelPath];
+  const args = ['-m', modelPath, '--metrics']; // --metrics 플래그 추가
   if (contextSize) args.push('-c', contextSize.toString());
   if (gpuLayers !== undefined && gpuLayers !== null) args.push('-ngl', gpuLayers.toString());
   if (frequencyPenalty) args.push('--frequency-penalty', frequencyPenalty.toString());
@@ -280,53 +280,50 @@ app.whenReady().then(() => {
       // llama-server가 실행 중이면 /metrics 엔드포인트에서 VRAM 정보 가져오기
       if (llamaServerProcess) {
         try {
-          // 비동기로 metrics 가져오기 (캐시된 값 사용, 백그라운드에서 업데이트)
-          (async () => {
-            try {
-              const data = await new Promise((resolve, reject) => {
-                const req = http.get('http://localhost:8080/metrics', { timeout: 1000 }, (res) => {
-                  let data = '';
-                  res.on('data', (chunk) => { data += chunk; });
-                  res.on('end', () => resolve(data));
-                });
-                req.on('error', reject);
-                req.on('timeout', () => {
-                  req.destroy();
-                  reject(new Error('Timeout'));
-                });
-              });
-              
-              // Prometheus 형식 파싱
-              const vramTotalMatch = data.match(/llamacpp:vram_total_bytes\s+(\d+)/);
-              const vramUsedMatch = data.match(/llamacpp:vram_used_bytes\s+(\d+)/);
-              const vramFreeMatch = data.match(/llamacpp:vram_free_bytes\s+(\d+)/);
-              
-              if (vramTotalMatch && vramUsedMatch) {
-                cachedVramTotal = parseInt(vramTotalMatch[1], 10);
-                cachedVramUsed = parseInt(vramUsedMatch[1], 10);
-              } else if (vramFreeMatch && vramTotalMatch) {
-                cachedVramTotal = parseInt(vramTotalMatch[1], 10);
-                const vramFree = parseInt(vramFreeMatch[1], 10);
-                cachedVramUsed = cachedVramTotal - vramFree;
-              }
-            } catch (error) {
-              // 에러는 무시 (다음 호출에서 재시도)
-            }
-          })();
+          // /metrics 엔드포인트에서 VRAM 정보 가져오기 (동기적으로 대기)
+          const data = await new Promise((resolve, reject) => {
+            const req = http.get('http://localhost:8080/metrics', { timeout: 1000 }, (res) => {
+              let data = '';
+              res.on('data', (chunk) => { data += chunk; });
+              res.on('end', () => resolve(data));
+            });
+            req.on('error', reject);
+            req.on('timeout', () => {
+              req.destroy();
+              reject(new Error('Timeout'));
+            });
+          });
           
-          // 캐시된 값 사용
-          if (cachedVramTotal > 0 && cachedVramUsed > 0) {
-            gpuUsage = (cachedVramUsed / cachedVramTotal) * 100;
-          } else if (cachedVramTotal > 0 && currentModelConfig) {
-            // 캐시된 값이 없으면 추정값 사용
-            const estimatedVRAMUsed = estimateVRAMUsage();
-            if (estimatedVRAMUsed > 0) {
-              gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
-              cachedVramUsed = estimatedVRAMUsed;
+          // Prometheus 형식 파싱
+          const vramTotalMatch = data.match(/llamacpp:vram_total_bytes\s+(\d+)/);
+          const vramUsedMatch = data.match(/llamacpp:vram_used_bytes\s+(\d+)/);
+          const vramFreeMatch = data.match(/llamacpp:vram_free_bytes\s+(\d+)/);
+          
+          if (vramTotalMatch && vramUsedMatch) {
+            cachedVramTotal = parseInt(vramTotalMatch[1], 10);
+            cachedVramUsed = parseInt(vramUsedMatch[1], 10);
+            if (cachedVramTotal > 0) {
+              gpuUsage = (cachedVramUsed / cachedVramTotal) * 100;
+            }
+          } else if (vramFreeMatch && vramTotalMatch) {
+            cachedVramTotal = parseInt(vramTotalMatch[1], 10);
+            const vramFree = parseInt(vramFreeMatch[1], 10);
+            cachedVramUsed = cachedVramTotal - vramFree;
+            if (cachedVramTotal > 0) {
+              gpuUsage = (cachedVramUsed / cachedVramTotal) * 100;
+            }
+          } else {
+            // VRAM 정보를 찾을 수 없으면 추정값 사용
+            if (cachedVramTotal > 0 && currentModelConfig) {
+              const estimatedVRAMUsed = estimateVRAMUsage();
+              if (estimatedVRAMUsed > 0) {
+                gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
+                cachedVramUsed = estimatedVRAMUsed;
+              }
             }
           }
         } catch (error) {
-          console.error('[Main] Error fetching metrics:', error);
+          console.error('[Main] Error fetching metrics:', error.message);
           // 에러 발생 시 추정값 사용
           if (cachedVramTotal > 0 && currentModelConfig) {
             const estimatedVRAMUsed = estimateVRAMUsage();
