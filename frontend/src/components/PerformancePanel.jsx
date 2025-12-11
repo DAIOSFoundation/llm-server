@@ -95,7 +95,7 @@ const PerformancePanel = () => {
           // console.log('[PerformancePanel] Received metrics:', {
           //   vramTotal: metrics.vramTotal,
           //   vramUsed: metrics.vramUsed,
-          //   vramUsage: metrics.vramUsage
+          //   vramUsage: metrics.vramUsage,
           // });
           
           if (metrics.vramTotal) {
