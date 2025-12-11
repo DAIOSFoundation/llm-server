@@ -149,6 +149,27 @@ function sendLog(channel, message) {
   }
 }
 
+// 메인 프로세스 로그를 렌더러로 전달 (개발자 도구에서 확인 가능)
+function logToRenderer(level, ...args) {
+  const message = args.map(arg => 
+    typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+  ).join(' ');
+  
+  // 터미널에도 출력
+  if (level === 'error') {
+    console.error(...args);
+  } else if (level === 'warn') {
+    console.warn(...args);
+  } else {
+    console.log(...args);
+  }
+  
+  // 렌더러로도 전달 (개발자 도구에서 확인 가능)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('main-log', { level, message, timestamp: new Date().toISOString() });
+  }
+}
+
 function initializeConfig() {
   if (!fs.existsSync(configPath)) {
     const defaultConfig = { models: [], activeModelId: null };
@@ -326,7 +347,9 @@ app.whenReady().then(() => {
             cachedVramUsed = parseInt(vramUsedMatch[1], 10);
             if (cachedVramTotal > 0) {
               vramUsagePercent = (cachedVramUsed / cachedVramTotal) * 100;
-              console.log(`[Main] VRAM from metrics: ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`);
+              const logMsg = `[Main] VRAM from metrics: ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`;
+              console.log(logMsg);
+              sendLog('log-message', logMsg);
             }
           } else if (vramFreeMatch && vramTotalMatch) {
             cachedVramTotal = parseInt(vramTotalMatch[1], 10);
