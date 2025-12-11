@@ -450,8 +450,8 @@ app.whenReady().then(() => {
         }
       }
       
-      // 디버깅: 반환되는 값 확인
-      console.log('[Main] Returning metrics - vramTotal:', cachedVramTotal, 'vramUsed:', cachedVramUsed, 'vramUsage:', Math.round(vramUsagePercent));
+          // 디버깅: 반환되는 값 확인
+      console.log('[Main] Returning metrics - vramTotal:', cachedVramTotal, 'vramUsed:', cachedVramUsed, 'vramUsage:', Math.round(vramUsagePercent), 'vramUsagePercent:', vramUsagePercent);
       
       return {
         cpu: Math.round(cpuUsage),
