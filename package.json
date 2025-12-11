@@ -5,7 +5,9 @@
   "main": "main.js",
   "scripts": {
     "start": "concurrently \"npm run dev --prefix frontend\" \"wait-on http://localhost:5173 && electron .\"",
-    "build": "vite build --prefix frontend && electron-builder"
+    "build": "npm run build:native && vite build --prefix frontend && electron-builder",
+    "build:native": "cd native && npm install && npm run build",
+    "postinstall": "npm run build:native"
   },
   "keywords": [],
   "author": "",
@@ -33,7 +35,8 @@
       "frontend/dist/**/*",
       "main.js",
       "preload.js",
-      "package.json"
+      "package.json",
+      "native/**/*"
     ],
     "extraResources": [
       {

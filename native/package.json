@@ -1,0 +1,19 @@
+{
+  "name": "metal-vram-monitor",
+  "version": "1.0.0",
+  "description": "Native module to get VRAM usage via Metal API",
+  "main": "index.js",
+  "scripts": {
+    "install": "node-gyp rebuild",
+    "build": "node-gyp rebuild"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "node-addon-api": "^7.0.0"
+  },
+  "devDependencies": {
+    "node-gyp": "^10.0.0"
+  }
+}

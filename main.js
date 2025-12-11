@@ -4,6 +4,17 @@ const fs = require('fs');
 const { spawn, exec } = require('child_process');
 const os = require('os');
 
+// Metal VRAM 모니터 모듈 로드 (macOS에서만)
+let metalVRAM = null;
+if (process.platform === 'darwin') {
+  try {
+    metalVRAM = require('./native');
+  } catch (error) {
+    console.warn('[Main] Failed to load Metal VRAM module:', error.message);
+    console.warn('[Main] Falling back to estimated VRAM usage');
+  }
+}
+
 const configPath = path.join(app.getPath('userData'), 'config.json');
 let llamaServerProcess = null;
 let mainWindow = null;
@@ -232,19 +243,50 @@ app.whenReady().then(() => {
       
       // GPU 사용량: VRAM 점유율로 계산
       let gpuUsage = 0;
-      if (cachedVramTotal > 0) {
-        // VRAM 사용량 추정
-        const estimatedVRAMUsed = estimateVRAMUsage();
-        if (estimatedVRAMUsed > 0) {
-          gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
-          cachedVramUsed = estimatedVRAMUsed; // 캐시 업데이트
-        } else {
-          // 모델이 로드되지 않았거나 GPU 레이어가 0이면 0%
-          gpuUsage = 0;
+      
+      // Metal API를 사용하여 실제 VRAM 사용량 가져오기 (macOS)
+      if (metalVRAM && process.platform === 'darwin') {
+        try {
+          const vramInfo = metalVRAM.getVRAMInfo();
+          if (!vramInfo.error && vramInfo.total > 0) {
+            cachedVramTotal = vramInfo.total;
+            cachedVramUsed = vramInfo.used;
+            gpuUsage = (vramInfo.used / vramInfo.total) * 100;
+          } else {
+            // Metal API 실패 시 추정값 사용
+            if (cachedVramTotal > 0) {
+              const estimatedVRAMUsed = estimateVRAMUsage();
+              if (estimatedVRAMUsed > 0) {
+                gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
+                cachedVramUsed = estimatedVRAMUsed;
+              }
+            }
+          }
+        } catch (error) {
+          console.error('[Main] Error getting VRAM info from Metal:', error);
+          // 에러 발생 시 추정값 사용
+          if (cachedVramTotal > 0) {
+            const estimatedVRAMUsed = estimateVRAMUsage();
+            if (estimatedVRAMUsed > 0) {
+              gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
+              cachedVramUsed = estimatedVRAMUsed;
+            }
+          }
         }
       } else {
-        // VRAM 총량을 알 수 없으면 랜덤값 사용 (임시)
-        gpuUsage = Math.random() * 100;
+        // Metal 모듈이 없거나 macOS가 아닌 경우 추정값 사용
+        if (cachedVramTotal > 0) {
+          const estimatedVRAMUsed = estimateVRAMUsage();
+          if (estimatedVRAMUsed > 0) {
+            gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
+            cachedVramUsed = estimatedVRAMUsed;
+          } else {
+            gpuUsage = 0;
+          }
+        } else {
+          // VRAM 총량을 알 수 없으면 랜덤값 사용 (임시)
+          gpuUsage = Math.random() * 100;
+        }
       }
       
       return {

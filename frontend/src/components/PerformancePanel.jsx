@@ -286,7 +286,7 @@ const PerformancePanel = () => {
           {/* GPU Usage (VRAM 점유율) */}
           <div className="memory-row" style={{ marginTop: '5px' }}>
             <div className="memory-label-small">
-              GPU Load (VRAM)
+              VRAM
               {vramTotal > 0 && (
                 <span style={{ fontSize: '0.7em', display: 'block', fontWeight: 'normal' }}>
                   ({(vramUsed / 1024 / 1024 / 1024).toFixed(1)} / {(vramTotal / 1024 / 1024 / 1024).toFixed(1)} GB)
