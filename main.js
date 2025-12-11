@@ -132,6 +132,8 @@ function createWindow() {
   const isDev = !app.isPackaged;
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
+    // 개발 모드에서 개발자 도구 자동 열기 (VRAM 로그 확인용)
+    mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
   }
