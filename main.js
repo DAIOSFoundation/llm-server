@@ -304,6 +304,7 @@ app.whenReady().then(() => {
             cachedVramUsed = parseInt(vramUsedMatch[1], 10);
             if (cachedVramTotal > 0) {
               gpuUsage = (cachedVramUsed / cachedVramTotal) * 100;
+              console.log(`[Main] VRAM from metrics: ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${gpuUsage.toFixed(1)}%)`);
             }
           } else if (vramFreeMatch && vramTotalMatch) {
             cachedVramTotal = parseInt(vramTotalMatch[1], 10);
@@ -311,14 +312,17 @@ app.whenReady().then(() => {
             cachedVramUsed = cachedVramTotal - vramFree;
             if (cachedVramTotal > 0) {
               gpuUsage = (cachedVramUsed / cachedVramTotal) * 100;
+              console.log(`[Main] VRAM from metrics (calculated): ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${gpuUsage.toFixed(1)}%)`);
             }
           } else {
-            // VRAM 정보를 찾을 수 없으면 추정값 사용
+            // VRAM 정보를 찾을 수 없음
+            console.warn('[Main] VRAM metrics not found in /metrics response');
             if (cachedVramTotal > 0 && currentModelConfig) {
               const estimatedVRAMUsed = estimateVRAMUsage();
               if (estimatedVRAMUsed > 0) {
                 gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
                 cachedVramUsed = estimatedVRAMUsed;
+                console.log(`[Main] Using estimated VRAM: ${(estimatedVRAMUsed / 1024 / 1024 / 1024).toFixed(2)} GB`);
               }
             }
           }
