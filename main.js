@@ -132,8 +132,6 @@ function createWindow() {
   const isDev = !app.isPackaged;
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
-    // 개발 모드에서 개발자 도구 자동 열기 (VRAM 로그 확인용)
-    mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
   }
@@ -357,7 +355,9 @@ app.whenReady().then(() => {
             cachedVramUsed = cachedVramTotal - vramFree;
             if (cachedVramTotal > 0) {
               vramUsagePercent = (cachedVramUsed / cachedVramTotal) * 100;
-              console.log(`[Main] VRAM from metrics (calculated): ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`);
+              const logMsg = `[Main] VRAM from metrics (calculated): ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`;
+              console.log(logMsg);
+              sendLog('log-message', logMsg);
             }
           } else {
             // VRAM 정보를 찾을 수 없음 - 추정값 사용
@@ -366,7 +366,9 @@ app.whenReady().then(() => {
               if (estimatedVRAMUsed > 0) {
                 cachedVramUsed = estimatedVRAMUsed;
                 vramUsagePercent = (estimatedVRAMUsed / cachedVramTotal) * 100;
-                console.log(`[Main] Using estimated VRAM: ${(estimatedVRAMUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`);
+                const logMsg = `[Main] Using estimated VRAM: ${(estimatedVRAMUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`;
+                console.log(logMsg);
+                sendLog('log-message', logMsg);
               }
             } else if (metalVRAM && process.platform === 'darwin') {
               // Metal API로 시도
@@ -376,7 +378,9 @@ app.whenReady().then(() => {
                   cachedVramTotal = vramInfo.total;
                   cachedVramUsed = vramInfo.used;
                   vramUsagePercent = (vramInfo.used / vramInfo.total) * 100;
-                  console.log(`[Main] Using Metal API VRAM: ${(vramInfo.used / 1024 / 1024 / 1024).toFixed(2)} GB / ${(vramInfo.total / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`);
+                  const logMsg = `[Main] Using Metal API VRAM: ${(vramInfo.used / 1024 / 1024 / 1024).toFixed(2)} GB / ${(vramInfo.total / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`;
+                  console.log(logMsg);
+                  sendLog('log-message', logMsg);
                 }
               } catch (metalError) {
                 console.error('[Main] Metal API error:', metalError.message);
@@ -384,7 +388,9 @@ app.whenReady().then(() => {
             }
           }
         } catch (error) {
-          console.error('[Main] Error fetching metrics:', error.message);
+          const errorMsg = `[Main] Error fetching metrics: ${error.message}`;
+          console.error(errorMsg);
+          sendLog('log-message', errorMsg);
           // 에러 발생 시 기본값 사용
           if (currentModelConfig && currentModelConfig.gpuLayers > 0) {
             gpuUsage = 50; // GPU 활성화되어 있으면 기본값
