@@ -318,11 +318,11 @@ export const countTokens = async (prompt) => {
         add_special: false,
         parse_special: true
       }),
+      signal: AbortSignal.timeout(2000), // 2초 타임아웃
     });
 
     if (!response.ok) {
-      // tokenize API가 실패하면 추정값 사용
-      console.warn('[API] Tokenize API failed, using estimation');
+      // tokenize API가 실패하면 추정값 사용 (조용히 처리)
       return Math.ceil(prompt.length / 2.0);
     }
 
@@ -332,11 +332,13 @@ export const countTokens = async (prompt) => {
     }
     
     // 응답 형식이 다를 경우 추정값 사용
-    console.warn('[API] Unexpected tokenize response format, using estimation');
     return Math.ceil(prompt.length / 2.0);
   } catch (error) {
-    console.warn('[API] Tokenize API error, using estimation:', error);
-    // API 호출 실패 시 보수적인 추정값 사용
+    // API 호출 실패 시 보수적인 추정값 사용 (조용히 처리)
+    // AbortError나 네트워크 에러는 로그 출력 안 함
+    if (error.name !== 'AbortError' && !error.message.includes('Failed to fetch')) {
+      console.warn('[API] Tokenize API error, using estimation:', error);
+    }
     return Math.ceil(prompt.length / 2.0);
   }
 };
