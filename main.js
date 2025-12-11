@@ -21,8 +21,9 @@ const configPath = path.join(app.getPath('userData'), 'config.json');
 let llamaServerProcess = null;
 let mainWindow = null;
 let cachedVramTotal = 0; // VRAM 용량 캐싱
-let cachedVramUsed = 0; // VRAM 사용량 (바이트)
+let cachedVramUsed = 0; // VRAM 사용량 (바이트) - 0으로 초기화
 let currentModelConfig = null; // 현재 로드된 모델 설정
+let lastVramUpdateTime = 0; // 마지막 VRAM 업데이트 시간 (디버깅용)
 
 // macOS VRAM 정보 가져오기
 function initVRAMInfo() {
@@ -366,22 +367,31 @@ app.whenReady().then(() => {
           console.log('[Main] VRAM parsing - Free match:', vramFreeMatch ? vramFreeMatch[1] : 'null');
           
           if (vramTotalMatch && vramUsedMatch) {
-            cachedVramTotal = Math.round(parseFloat(vramTotalMatch[1]));
-            cachedVramUsed = Math.round(parseFloat(vramUsedMatch[1]));
-            console.log('[Main] VRAM parsed - Total:', cachedVramTotal, 'Used:', cachedVramUsed);
-            if (cachedVramTotal > 0 && cachedVramUsed >= 0) {
+            const parsedTotal = Math.round(parseFloat(vramTotalMatch[1]));
+            const parsedUsed = Math.round(parseFloat(vramUsedMatch[1]));
+            console.log('[Main] VRAM parsed - Total:', parsedTotal, 'Used:', parsedUsed);
+            
+            if (parsedTotal > 0 && parsedUsed >= 0) {
+              cachedVramTotal = parsedTotal;
+              cachedVramUsed = parsedUsed; // 명시적으로 설정
+              lastVramUpdateTime = Date.now();
               vramUsagePercent = (cachedVramUsed / cachedVramTotal) * 100;
               const logMsg = `[Main] VRAM from metrics: ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`;
               console.log(logMsg);
               sendLog('log-message', logMsg);
             } else {
-              console.warn('[Main] VRAM total is 0 or used is invalid after parsing. Total:', cachedVramTotal, 'Used:', cachedVramUsed);
+              console.warn('[Main] VRAM total is 0 or used is invalid after parsing. Total:', parsedTotal, 'Used:', parsedUsed);
             }
           } else if (vramFreeMatch && vramTotalMatch) {
-            cachedVramTotal = Math.round(parseFloat(vramTotalMatch[1]));
+            const parsedTotal = Math.round(parseFloat(vramTotalMatch[1]));
             const vramFree = Math.round(parseFloat(vramFreeMatch[1]));
-            cachedVramUsed = cachedVramTotal - vramFree;
-            if (cachedVramTotal > 0) {
+            const calculatedUsed = parsedTotal - vramFree;
+            console.log('[Main] VRAM calculated - Total:', parsedTotal, 'Free:', vramFree, 'Used:', calculatedUsed);
+            
+            if (parsedTotal > 0 && calculatedUsed >= 0) {
+              cachedVramTotal = parsedTotal;
+              cachedVramUsed = calculatedUsed; // 명시적으로 설정
+              lastVramUpdateTime = Date.now();
               vramUsagePercent = (cachedVramUsed / cachedVramTotal) * 100;
               const logMsg = `[Main] VRAM from metrics (calculated): ${(cachedVramUsed / 1024 / 1024 / 1024).toFixed(2)} GB / ${(cachedVramTotal / 1024 / 1024 / 1024).toFixed(2)} GB (${vramUsagePercent.toFixed(1)}%)`;
               console.log(logMsg);
@@ -459,7 +469,7 @@ app.whenReady().then(() => {
       }
       
           // 디버깅: 반환되는 값 확인
-      console.log('[Main] Returning metrics - llamaServerProcess:', !!llamaServerProcess, 'vramTotal:', cachedVramTotal, 'vramUsed:', cachedVramUsed, 'vramUsage:', Math.round(vramUsagePercent), 'vramUsagePercent:', vramUsagePercent);
+      console.log('[Main] Returning metrics - llamaServerProcess:', !!llamaServerProcess, 'vramTotal:', cachedVramTotal, 'vramUsed:', cachedVramUsed, 'vramUsage:', Math.round(vramUsagePercent), 'vramUsagePercent:', vramUsagePercent, 'lastUpdate:', lastVramUpdateTime > 0 ? new Date(lastVramUpdateTime).toISOString() : 'never');
       
       return {
         cpu: Math.round(cpuUsage),
