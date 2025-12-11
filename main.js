@@ -182,7 +182,7 @@ function startLlamaServer(modelConfig) {
     return;
   }
   
-  const args = ['-m', modelPath, '--metrics']; // --metrics 플래그 추가
+  const args = ['-m', modelPath, '--metrics', '--port', '8080']; // --metrics 플래그 추가, 포트 명시
   if (contextSize) args.push('-c', contextSize.toString());
   if (gpuLayers !== undefined && gpuLayers !== null) args.push('-ngl', gpuLayers.toString());
   if (frequencyPenalty) args.push('--frequency-penalty', frequencyPenalty.toString());
@@ -331,6 +331,9 @@ app.whenReady().then(() => {
               gpuUsage = (estimatedVRAMUsed / cachedVramTotal) * 100;
               cachedVramUsed = estimatedVRAMUsed;
             }
+          } else {
+            // VRAM 정보를 가져올 수 없으면 0으로 설정
+            gpuUsage = 0;
           }
         }
       } else {
