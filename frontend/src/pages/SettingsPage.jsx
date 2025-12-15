@@ -21,6 +21,53 @@ const SettingsPage = () => {
 
   const STORAGE_KEY = 'llmServerClientConfig';
 
+  const deriveModelIdFromAnyPath = (p) => {
+    if (!p) return '';
+    const file = String(p).split(/[\\/]/).pop() || '';
+    return file.replace(/\.gguf$/i, '');
+  };
+
+  const migrateLegacyModelsToClientConfig = (legacyModels) => {
+    const migrated = (legacyModels || []).map((m, idx) => {
+      const ic = m?.inferenceConfig || {};
+      const modelId = deriveModelIdFromAnyPath(m?.path) || '';
+
+      return {
+        id: m?.id || `legacy_${Date.now()}_${idx}`,
+        // name은 UI에서 거의 쓰지 않지만 보존
+        name: m?.name || 'Legacy Model',
+        // 라우터 모드에서 쓰는 "모델 ID"
+        modelPath: modelId,
+        accelerator: (String(m?.device || '').toUpperCase() === 'MPS') ? 'mps' : 'auto',
+        gpuLayers: 0,
+        contextSize: ic.contextSize ?? 2048,
+        maxTokens: ic.maxTokens ?? 300,
+        temperature: ic.temperature ?? 0.7,
+        topK: ic.topK ?? 40,
+        topP: ic.topP ?? 0.9,
+        minP: 0.1,
+        tfsZ: 1.0,
+        typicalP: 1.0,
+        repeatPenalty: ic.repeatPenalty ?? 1.2,
+        repeatLastN: ic.repeatLastN ?? 128,
+        penalizeNL: false,
+        presencePenalty: 0.0,
+        frequencyPenalty: 0.0,
+        dryMultiplier: 0.8,
+        dryBase: 1.75,
+        dryAllowedLength: 2,
+        dryPenaltyLastN: -1,
+        mirostatMode: 0,
+        mirostatTau: 5.0,
+        mirostatEta: 0.1,
+        showSpecialTokens: false,
+      };
+    }).filter((m) => m.modelPath);
+
+    if (migrated.length === 0) return { models: [], activeModelId: null };
+    return { models: migrated, activeModelId: migrated[0].id };
+  };
+
   const loadClientConfig = () => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -33,6 +80,28 @@ const SettingsPage = () => {
       // ignore
     }
     return { models: [], activeModelId: null };
+  };
+
+  const loadClientConfigAsync = async () => {
+    const local = loadClientConfig();
+    if (local && Array.isArray(local.models) && local.models.length > 0) return local;
+
+    // 레거시 파일(이전 버전)에서 1회 마이그레이션
+    try {
+      const res = await fetch('/legacy-models.json', { signal: AbortSignal.timeout(1000) });
+      if (res.ok) {
+        const legacy = await res.json();
+        const migrated = migrateLegacyModelsToClientConfig(legacy);
+        if (migrated.models.length > 0) {
+          saveClientConfig(migrated);
+          return migrated;
+        }
+      }
+    } catch (_e) {
+      // ignore
+    }
+
+    return local;
   };
 
   const saveClientConfig = (cfg) => {
@@ -115,7 +184,7 @@ const SettingsPage = () => {
             }
           }
       } else {
-        const loadedConfig = loadClientConfig();
+        const loadedConfig = await loadClientConfigAsync();
         setConfig(loadedConfig);
         if (loadedConfig.activeModelId) {
           setSelectedModelId(loadedConfig.activeModelId);
