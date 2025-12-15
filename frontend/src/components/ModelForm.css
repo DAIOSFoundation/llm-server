@@ -44,13 +44,14 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .quantization-left {
   display: grid;
   grid-template-columns: 1fr;
   gap: 20px;
+  height: 100%;
 }
 
 .quantization-description {
@@ -58,6 +59,9 @@
   background-color: var(--background-color-darker);
   border-radius: 8px;
   padding: 12px 14px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .quantization-description-title {
@@ -67,15 +71,27 @@
   margin-bottom: 8px;
 }
 
-.quantization-description-paragraph {
-  margin: 0 0 10px 0;
+.quantization-summary {
+  list-style: none;
+  padding: 0;
+  margin: 0;
   color: var(--text-color-secondary);
   font-size: 0.92rem;
   line-height: 1.5;
 }
 
-.quantization-description-paragraph:last-child {
+.quantization-summary-item {
+  margin: 0 0 8px 0;
+}
+
+.quantization-summary-item:last-child {
   margin-bottom: 0;
+}
+
+.quantization-summary-empty {
+  color: var(--text-color-secondary);
+  font-size: 0.92rem;
+  line-height: 1.5;
 }
 
 .form-group {
