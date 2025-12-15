@@ -259,8 +259,13 @@ const PerformancePanel = () => {
 
           const tps = Number(data.tps || 0);
           setTokenSpeed(Math.max(0, tps));
-          // keep existing "GPU" gauge semantics (display-only)
-          setGpuUsage(Math.max(0, Math.min(100, Math.round(tps))));
+          // GPU 게이지는 실제 GPU 점유율을 얻기 어려워(플랫폼별/백엔드별),
+          // router 모드에서는 VRAM 점유율(%)을 GPU 지표로 사용한다.
+          if (vramTotalBytes > 0) {
+            setGpuUsage(Math.max(0, Math.min(100, (vramUsedBytes / vramTotalBytes) * 100)));
+          } else {
+            setGpuUsage(0);
+          }
 
           const predictedTotal = Number(data.predictedTotal || 0);
           if (lastPredictedTotalRef.current != null) {
