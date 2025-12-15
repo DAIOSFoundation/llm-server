@@ -21,6 +21,27 @@ const PerformancePanel = () => {
   const lastProcCpuSecondsRef = useRef(null);
   const lastProcCpuSampleAtRef = useRef(null);
   const lastPredictedTotalRef = useRef(null);
+  const eventSourceRef = useRef(null);
+
+  const getActiveModelIdForMetrics = () => {
+    // New client-only config (SettingsPage)
+    try {
+      const clientCfg = JSON.parse(localStorage.getItem('llmServerClientConfig')) || null;
+      if (clientCfg && clientCfg.models && clientCfg.activeModelId && clientCfg.models[clientCfg.activeModelId]) {
+        const modelPath = String(clientCfg.models[clientCfg.activeModelId].modelPath || '').trim();
+        if (modelPath) return modelPath;
+      }
+    } catch (_e) {}
+
+    // Legacy single-model config
+    try {
+      const config = JSON.parse(localStorage.getItem('modelConfig')) || {};
+      const modelPath = String(config.modelPath || '').trim();
+      if (modelPath) return modelPath;
+    } catch (_e) {}
+
+    return '';
+  };
 
   useEffect(() => {
     // 토큰 속도 업데이트를 위한 전역 이벤트 리스너
@@ -118,79 +139,8 @@ const PerformancePanel = () => {
           setMemoryUsage(Math.random() * 100);
         }
       } else {
-        // Electron이 없으면 llama-server /metrics 기준으로 최소한의 성능 지표만 표시
-        // (라우터 모드에서는 model query param 필요)
-        try {
-          const config = JSON.parse(localStorage.getItem('modelConfig')) || {};
-          const model = encodeURIComponent((config.modelPath || '').trim());
-          if (!model) return;
-
-          const res = await fetch(`${LLAMA_BASE_URL}/metrics?model=${model}`, { signal: AbortSignal.timeout(1500) });
-          if (res.ok) {
-            const text = await res.text();
-            const vramTotalMatch = text.match(/llamacpp:vram_total_bytes\s+([\d.e+\-]+)/);
-            const vramUsedMatch = text.match(/llamacpp:vram_used_bytes\s+([\d.e+\-]+)/);
-            const tpsMatch = text.match(/llamacpp:predicted_tokens_seconds\s+([\d.e+\-]+)/);
-            const predictedTotalMatch = text.match(/llamacpp:tokens_predicted_total\s+([\d.e+\-]+)/);
-
-            const sysMemTotalMatch = text.match(/llamacpp:system_memory_total_bytes\s+([\d.e+\-]+)/);
-            const sysMemUsedMatch = text.match(/llamacpp:system_memory_used_bytes\s+([\d.e+\-]+)/);
-            const procCpuSecMatch = text.match(/llamacpp:process_cpu_seconds_total\s+([\d.e+\-]+)/);
-            const cpuCoresMatch = text.match(/llamacpp:system_cpu_cores\s+([\d.e+\-]+)/);
-
-            if (vramTotalMatch) setVramTotal(Math.round(parseFloat(vramTotalMatch[1])));
-            if (vramUsedMatch) setVramUsed(Math.round(parseFloat(vramUsedMatch[1])));
-
-            if (tpsMatch) {
-              const tps = parseFloat(tpsMatch[1]);
-              // 처리량을 0~100으로 단순 스케일(표시용)
-              setGpuUsage(Math.max(0, Math.min(100, Math.round(tps))));
-              // 토큰 생성 속도는 metrics 값을 우선 표시 (stream 이벤트가 없어도 갱신됨)
-              setTokenSpeed(Math.max(0, tps));
-            } else {
-              setGpuUsage(0);
-            }
-
-            if (predictedTotalMatch) {
-              const total = Math.round(parseFloat(predictedTotalMatch[1]));
-              if (lastPredictedTotalRef.current != null) {
-                const delta = Math.max(0, total - lastPredictedTotalRef.current);
-                setTokenCount(delta);
-              }
-              lastPredictedTotalRef.current = total;
-            }
-
-            // system memory usage (%)
-            if (sysMemTotalMatch && sysMemUsedMatch) {
-              const total = parseFloat(sysMemTotalMatch[1]);
-              const used = parseFloat(sysMemUsedMatch[1]);
-              if (total > 0 && used >= 0) {
-                setMemoryUsage(Math.max(0, Math.min(100, (used / total) * 100)));
-              }
-            }
-
-            // process CPU usage (% across all cores)
-            if (procCpuSecMatch) {
-              const now = Date.now();
-              const cpuSec = parseFloat(procCpuSecMatch[1]);
-              const cores = cpuCoresMatch ? Math.max(1, Math.round(parseFloat(cpuCoresMatch[1]))) : 1;
-
-              if (lastProcCpuSecondsRef.current != null && lastProcCpuSampleAtRef.current != null) {
-                const dt = (now - lastProcCpuSampleAtRef.current) / 1000;
-                const dcpu = cpuSec - lastProcCpuSecondsRef.current;
-                if (dt > 0 && dcpu >= 0) {
-                  const pct = (dcpu / dt / cores) * 100;
-                  setCpuUsage(Math.max(0, Math.min(100, pct)));
-                }
-              }
-
-              lastProcCpuSecondsRef.current = cpuSec;
-              lastProcCpuSampleAtRef.current = now;
-            }
-          }
-        } catch (_e) {
-          // 조용히 무시
-        }
+        // client-only: use SSE stream from llama-server (no polling)
+        // NOTE: this is a no-op here; SSE is established in a separate effect below.
       }
     };
 
@@ -212,17 +162,104 @@ const PerformancePanel = () => {
       }
     };
 
-    const interval = setInterval(updateSystemMetrics, 1000);
+    // Electron mode keeps polling via IPC. Client-only uses SSE below.
+    const interval = window.electronAPI && window.electronAPI.getSystemMetrics
+      ? setInterval(updateSystemMetrics, 1000)
+      : null;
     const configCheckInterval = setInterval(checkConfigUpdate, 1000);
 
-    updateSystemMetrics(); // Initial call
+    updateSystemMetrics(); // Initial call (Electron only)
 
     return () => {
       window.removeEventListener('token-received', handleTokenReceived);
       window.removeEventListener('context-update', handleContextUpdate);
       window.removeEventListener('config-updated', handleConfigUpdate);
-      clearInterval(interval);
+      if (interval) clearInterval(interval);
       clearInterval(configCheckInterval);
+    };
+  }, []);
+
+  // SSE metrics stream (client-only mode)
+  useEffect(() => {
+    if (window.electronAPI && window.electronAPI.getSystemMetrics) return;
+    if (typeof EventSource === 'undefined') return;
+
+    const connect = () => {
+      const modelId = getActiveModelIdForMetrics();
+      if (!modelId) return;
+
+      const url = `${LLAMA_BASE_URL}/metrics/stream?model=${encodeURIComponent(modelId)}&interval_ms=1000`;
+      const es = new EventSource(url);
+      eventSourceRef.current = es;
+
+      es.addEventListener('metrics', (evt) => {
+        try {
+          const data = JSON.parse(evt.data);
+
+          const vramTotalBytes = Number(data.vramTotal || 0);
+          const vramUsedBytes = Number(data.vramUsed || 0);
+          if (vramTotalBytes > 0) setVramTotal(Math.round(vramTotalBytes));
+          if (vramUsedBytes >= 0) setVramUsed(Math.round(vramUsedBytes));
+
+          const sysMemTotal = Number(data.sysMemTotal || 0);
+          const sysMemUsed = Number(data.sysMemUsed || 0);
+          if (sysMemTotal > 0 && sysMemUsed >= 0) {
+            setMemoryUsage(Math.max(0, Math.min(100, (sysMemUsed / sysMemTotal) * 100)));
+          }
+
+          const now = Date.now();
+          const cpuSec = Number(data.procCpuSec || 0);
+          const cores = Math.max(1, Math.round(Number(data.cpuCores || 1)));
+          if (lastProcCpuSecondsRef.current != null && lastProcCpuSampleAtRef.current != null) {
+            const dt = (now - lastProcCpuSampleAtRef.current) / 1000;
+            const dcpu = cpuSec - lastProcCpuSecondsRef.current;
+            if (dt > 0 && dcpu >= 0) {
+              const pct = (dcpu / dt / cores) * 100;
+              setCpuUsage(Math.max(0, Math.min(100, pct)));
+            }
+          }
+          lastProcCpuSecondsRef.current = cpuSec;
+          lastProcCpuSampleAtRef.current = now;
+
+          const tps = Number(data.tps || 0);
+          setTokenSpeed(Math.max(0, tps));
+          // keep existing "GPU" gauge semantics (display-only)
+          setGpuUsage(Math.max(0, Math.min(100, Math.round(tps))));
+
+          const predictedTotal = Number(data.predictedTotal || 0);
+          if (lastPredictedTotalRef.current != null) {
+            const delta = Math.max(0, Math.round(predictedTotal - lastPredictedTotalRef.current));
+            setTokenCount(delta);
+          }
+          lastPredictedTotalRef.current = predictedTotal;
+        } catch (_e) {
+          // ignore
+        }
+      });
+    };
+
+    // connect immediately and reconnect when config changes
+    connect();
+    const onConfigUpdated = () => {
+      if (eventSourceRef.current) {
+        try { eventSourceRef.current.close(); } catch (_e) {}
+        eventSourceRef.current = null;
+      }
+      connect();
+    };
+
+    window.addEventListener('client-config-updated', onConfigUpdated);
+    window.addEventListener('config-updated', onConfigUpdated);
+    window.addEventListener('storage', onConfigUpdated);
+
+    return () => {
+      window.removeEventListener('client-config-updated', onConfigUpdated);
+      window.removeEventListener('config-updated', onConfigUpdated);
+      window.removeEventListener('storage', onConfigUpdated);
+      if (eventSourceRef.current) {
+        try { eventSourceRef.current.close(); } catch (_e) {}
+        eventSourceRef.current = null;
+      }
     };
   }, []);
 
