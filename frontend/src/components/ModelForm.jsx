@@ -142,16 +142,52 @@ const ModelForm = ({ config, onChange }) => {
     const looksLikePath = trimmed.includes('/') || trimmed.includes('\\') || trimmed.endsWith('.gguf');
     const modelId = trimmed.replace(/\.gguf$/i, '');
 
-    const res = await fetch(`${LLAMA_BASE_URL}/gguf-info`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: looksLikePath
-        ? JSON.stringify({ path: trimmed })
-        : JSON.stringify({ model: modelId }),
-      signal: AbortSignal.timeout(3000),
-    });
-    const info = await res.json().catch(() => null);
-    if (res.ok && info && info.ok) return info;
+    const extractErrorMessage = (info) => {
+      if (!info) return '';
+      if (typeof info.error === 'string') return info.error;
+      if (info.error && typeof info.error === 'object') {
+        if (typeof info.error.message === 'string') return info.error.message;
+      }
+      return '';
+    };
+
+    const callBy = async (payload) => {
+      const res = await fetch(`${LLAMA_BASE_URL}/gguf-info`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10000),
+      });
+      const info = await res.json().catch(() => null);
+      return { res, info };
+    };
+
+    // 1) Preferred: router-mode id resolution on server ({model})
+    const first = looksLikePath
+      ? await callBy({ path: trimmed })
+      : await callBy({ model: modelId });
+
+    if (first.res.ok && first.info && first.info.ok) return first.info;
+
+    // 2) Backward-compatible fallback: older servers only support {path}, so resolve via /models list
+    if (!looksLikePath) {
+      try {
+        const listRes = await fetch(`${LLAMA_BASE_URL}/models`, { signal: AbortSignal.timeout(4000) });
+        const listJson = await listRes.json().catch(() => null);
+        const items = listJson && Array.isArray(listJson.data) ? listJson.data : [];
+        const found = items.find((m) => m && m.id === modelId);
+        if (found && found.path) {
+          const second = await callBy({ path: found.path });
+          if (second.res.ok && second.info && second.info.ok) return second.info;
+        }
+      } catch (_e) {
+        // ignore
+      }
+    }
+
+    // no-op: keep auto-load silent
+    const _msg = extractErrorMessage(first.info);
+    void _msg;
     return null;
   };
 
@@ -197,26 +233,49 @@ const ModelForm = ({ config, onChange }) => {
       const looksLikePath = raw.includes('/') || raw.includes('\\') || raw.endsWith('.gguf');
       const modelId = raw.replace(/\.gguf$/i, '');
 
-      const res = await fetch(`${LLAMA_BASE_URL}/gguf-info`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: looksLikePath
-          ? JSON.stringify({ path: raw })
-          : JSON.stringify({ model: modelId }),
-        signal: AbortSignal.timeout(3000),
-      });
+      const extractErrorMessage = (info) => {
+        if (!info) return '';
+        if (typeof info.error === 'string') return info.error;
+        if (info.error && typeof info.error === 'object') {
+          if (typeof info.error.message === 'string') return info.error.message;
+        }
+        return '';
+      };
 
-      const info = await res.json().catch(() => null);
+      const callBy = async (payload) => {
+        const res = await fetch(`${LLAMA_BASE_URL}/gguf-info`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(10000),
+        });
+        const info = await res.json().catch(() => null);
+        return { res, info };
+      };
 
-      if (res.ok && info && info.ok) {
-        setGgufInfo(info);
+      // 1) Preferred: server resolves by {model} (router mode)
+      let out = looksLikePath
+        ? await callBy({ path: raw })
+        : await callBy({ model: modelId });
+
+      // 2) Backward-compatible fallback for older servers: resolve path via /models and retry with {path}
+      if (!(out.res.ok && out.info && out.info.ok) && !looksLikePath) {
+        const listRes = await fetch(`${LLAMA_BASE_URL}/models`, { signal: AbortSignal.timeout(4000) });
+        const listJson = await listRes.json().catch(() => null);
+        const items = listJson && Array.isArray(listJson.data) ? listJson.data : [];
+        const found = items.find((m) => m && m.id === modelId);
+        if (found && found.path) {
+          out = await callBy({ path: found.path });
+        }
+      }
+
+      if (out.res.ok && out.info && out.info.ok) {
+        setGgufInfo(out.info);
         setPathCheck({ status: 'ok', message: t('settings.verifyPathOk') });
       } else {
+        const msg = extractErrorMessage(out.info);
         setGgufInfo(null);
-        setPathCheck({
-          status: 'error',
-          message: (info && info.error) ? info.error : t('settings.verifyPathFail'),
-        });
+        setPathCheck({ status: 'error', message: msg || t('settings.verifyPathFail') });
       }
     } catch (_e) {
       setGgufInfo(null);
