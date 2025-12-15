@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useLanguage } from '../contexts/LanguageContext';
 import './ModelForm.css';
 import { LLAMA_BASE_URL } from '../services/api';
@@ -93,6 +93,8 @@ const ModelForm = ({ config, onChange }) => {
   const [formData, setFormData] = useState({});
   const [ggufInfo, setGgufInfo] = useState(null);
   const [pathCheck, setPathCheck] = useState({ status: 'idle', message: '' }); // idle | checking | ok | error
+  const userEditedModelPathRef = useRef(false);
+  const lastAutoFetchModelIdRef = useRef(null);
 
   useEffect(() => {
     const defaults = {
@@ -107,6 +109,12 @@ const ModelForm = ({ config, onChange }) => {
     setFormData({ ...defaults, ...config });
   }, [config]);
 
+  // 모델 선택이 바뀌면 자동 조회 상태를 초기화
+  useEffect(() => {
+    userEditedModelPathRef.current = false;
+    lastAutoFetchModelIdRef.current = null;
+  }, [config?.id]);
+
   // modelPath 변경 시: 기존 검증/메타데이터 상태 초기화
   useEffect(() => {
     setGgufInfo(null);
@@ -115,6 +123,9 @@ const ModelForm = ({ config, onChange }) => {
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
+    if (name === 'modelPath') {
+      userEditedModelPathRef.current = true;
+    }
     const newFormData = {
       ...formData,
       [name]: type === 'checkbox' ? checked : (type === 'number' ? parseFloat(value) : value),
@@ -122,6 +133,64 @@ const ModelForm = ({ config, onChange }) => {
     setFormData(newFormData);
     onChange(newFormData);
   };
+
+  const fetchGgufInfoForModelPath = async (raw) => {
+    // same resolution logic as verify, but returns info or null
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) return null;
+
+    const looksLikePath = trimmed.includes('/') || trimmed.includes('\\') || trimmed.endsWith('.gguf');
+    const modelId = trimmed.replace(/\.gguf$/i, '');
+
+    let ggufPath = trimmed;
+    if (!looksLikePath) {
+      const listRes = await fetch(`${LLAMA_BASE_URL}/models`, { signal: AbortSignal.timeout(2000) });
+      const listJson = await listRes.json().catch(() => null);
+      const items = listJson && Array.isArray(listJson.data) ? listJson.data : [];
+      const found = items.find((m) => m && m.id === modelId);
+      if (found && found.path) {
+        ggufPath = found.path;
+      } else {
+        return null;
+      }
+    }
+
+    const res = await fetch(`${LLAMA_BASE_URL}/gguf-info`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: ggufPath }),
+      signal: AbortSignal.timeout(3000),
+    });
+    const info = await res.json().catch(() => null);
+    if (res.ok && info && info.ok) return info;
+    return null;
+  };
+
+  // 설정 로드/모델 선택 시 자동으로 GGUF 메타데이터를 불러와 요약을 표시
+  // - 사용자가 modelPath를 직접 수정 중이면 자동 조회하지 않음(원치 않는 서버 호출 방지)
+  useEffect(() => {
+    const modelId = config?.id || null;
+    const raw = (formData.modelPath || '').trim();
+    if (!modelId || !raw) return;
+    if (ggufInfo && ggufInfo.ok) return;
+    if (pathCheck.status === 'checking') return;
+    if (userEditedModelPathRef.current) return;
+    if (lastAutoFetchModelIdRef.current === modelId) return;
+
+    lastAutoFetchModelIdRef.current = modelId;
+
+    (async () => {
+      try {
+        const info = await fetchGgufInfoForModelPath(raw);
+        if (info) {
+          setGgufInfo(info);
+        }
+      } catch (_e) {
+        // silent fail
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config?.id, formData.modelPath, ggufInfo, pathCheck.status]);
 
   const handleVerifyPath = async () => {
     const raw = (formData.modelPath || '').trim();
