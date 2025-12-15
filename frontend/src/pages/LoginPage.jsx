@@ -6,7 +6,7 @@ import './LoginPage.css';
 
 const isStrongPassword = (s) => {
   const v = String(s || '');
-  if (v.length < 12) return false;
+  if (v.length < 8) return false;
   const hasLower = /[a-z]/.test(v);
   const hasUpper = /[A-Z]/.test(v);
   const hasSpecial = /[^a-zA-Z0-9]/.test(v);
