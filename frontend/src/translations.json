@@ -34,7 +34,7 @@
     "settings.save": "저장",
     "settings.close": "취소",
     "settings.modelPath": "모델 경로",
-    "settings.modelPathPlaceholder": "서버 기준 모델 파일 경로를 입력하세요 (예: /models/llama/model.gguf)",
+    "settings.modelPathPlaceholder": "모델 ID를 입력하세요 (예: llama31-banyaa-q4_k_m)",
     "settings.verifyPath": "경로 확인",
     "settings.verifying": "확인 중...",
     "settings.verifyPathOk": "GGUF 파일을 확인했습니다.",
