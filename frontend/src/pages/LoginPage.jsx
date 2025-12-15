@@ -39,7 +39,7 @@ const LoginPage = () => {
       setSuperAdminId(auth.superAdminId || '');
       setMode('login');
     } else {
-      setSuperAdminId('');
+      setSuperAdminId('superadmin');
       setMode('setup');
     }
   }, [auth?.loading, auth?.authenticated, auth?.initialized, auth?.superAdminId]);
