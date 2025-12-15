@@ -1,64 +1,64 @@
 # LLM Server (llama.cpp + React)
 
-GGUF 기반 LLM을 **`llama.cpp`의 `llama-server`**로 서빙하고, React UI로 설정/채팅/모니터링하는 프로젝트입니다.
+This project serves GGUF-based LLMs via **`llama.cpp`’s `llama-server`** and provides a React UI for configuration, chat, and monitoring.
 
-- **클라이언트(UI)**: `frontend/` (React + Vite)
-- **서버(추론/라우터)**: `llama.cpp/build/bin/llama-server` (Router Mode 권장)
-- **데스크톱(선택 사항)**: Electron 래퍼 (`npm run desktop`)
+- **Client (UI)**: `frontend/` (React + Vite)
+- **Server (Inference/Router)**: `llama.cpp/build/bin/llama-server` (Router Mode recommended)
+- **Desktop (optional)**: Electron wrapper (`npm run desktop`)
 
 ---
 
-## 구조
+## Structure
 
 ```text
 llm-server/
-├─ frontend/                 # React(Vite) 클라이언트
+├─ frontend/                 # React (Vite) client
 ├─ llama.cpp/                # llama.cpp (Git submodule)
-├─ models-config.json        # (서버) 모델 로드 옵션 저장 파일 (router)
-├─ user_pw.json              # (서버) 수퍼관리자 비밀번호 해시 저장 파일 (gitignore)
-├─ main.js / preload.js      # (선택) Electron 래퍼
-└─ package.json              # 실행/빌드 스크립트
+├─ models-config.json        # (server) per-model load options (router)
+├─ user_pw.json              # (server) super-admin password hash file (gitignore)
+├─ main.js / preload.js      # (optional) Electron wrapper
+└─ package.json              # run/build scripts
 ```
 
 ---
 
-## 주요 기능
+## Key Features
 
-- **로그인(수퍼관리자)**
-  - 최초 실행 시 수퍼관리자 계정 생성 → 이후 로그인
-  - 비밀번호는 서버 파일 `user_pw.json`에 **salt + 반복 SHA-256 해시**로 저장 (평문 저장 없음)
-- **모델 설정/관리**
-  - 모델 ID(=router에서의 모델 이름) 기반으로 다중 모델을 추가/수정/삭제
-  - 설정 저장 시 서버에 모델 로드 설정을 전달하고, 라우터에서 모델을 unload/load 하여 적용
-- **GGUF 메타데이터(양자화) 표시**
-  - `POST /gguf-info`로 GGUF를 읽고, **양자화/텐서 타입/QKV 타입** 요약을 표시
-  - 설정 로드 시 모델 ID가 있으면 **자동으로 메타데이터를 조회**해 요약을 표시
-- **실시간 성능 지표(푸시 기반)**
-  - `GET /metrics/stream`(SSE)로 VRAM/메모리/CPU/토큰 속도 등을 **폴링 없이** 갱신
-- **GPU “사용률(연산 바쁨%)”**
-  - 현재 UI의 GPU 게이지는 **실제 GPU 연산 사용률이 아니라 VRAM 점유율(%)**을 표시합니다.
-  - `llama.cpp` 기본 metrics에는 플랫폼 공통의 “GPU 바쁨%” 지표가 없어서, 현 시점에서는 **Linux 서비스 환경을 기준으로 별도 구현이 필요**합니다.
-  - (향후) Linux에서는 다음 중 한 가지 방식으로 GPU 사용률을 구현하는 것이 현실적입니다.
-    - **NVIDIA**: `NVML`(예: `nvmlDeviceGetUtilizationRates`, `nvmlDeviceGetMemoryInfo`) 기반으로 `gpuUtil%/vramUsed/vramTotal` 수집
-    - **AMD**: `rocm-smi` / `libdrm` / sysfs 기반 수집
-    - **Intel**: `intel_gpu_top`/sysfs 기반 수집
-  - 구현 위치는 “서버 측 metrics 수집(server task)”에 통합하여 `/metrics` 및 `/metrics/stream`에 포함시키는 방향을 권장합니다.
-- **가이드 페이지**
-  - Curl/JS/React/Python/Java/C#/C++ 예제 카드 제공(기본 접힘)
+- **Login (Super Admin)**
+  - Create a super-admin account on first run → then login on subsequent runs
+  - Password is stored in `user_pw.json` on the server as **salt + iterative SHA-256 hash** (no plaintext storage)
+- **Model Configuration & Management**
+  - Add/edit/delete multiple models by **Model ID** (= model name in router mode)
+  - When saving settings, the UI sends model load settings to the server and applies them via router unload/load
+- **GGUF Metadata (Quantization) Display**
+  - Reads GGUF via `POST /gguf-info` and shows a summary of **quantization / tensor types / QKV types**
+  - When loading settings, if a model ID exists, metadata is **fetched automatically** and the summary is shown
+- **Real-time Performance Metrics (Push-based)**
+  - Updates VRAM / memory / CPU / token speed via `GET /metrics/stream` (SSE) **without polling**
+- **GPU “Utilization (Compute Busy %)”**
+  - The current GPU gauge in the UI shows **VRAM occupancy (%)**, not actual GPU compute utilization.
+  - `llama.cpp`’s default metrics do not expose a cross-platform “GPU busy %”, so **additional implementation is required for Linux production**.
+  - (Future) On Linux, these approaches are practical:
+    - **NVIDIA**: NVML (e.g., `nvmlDeviceGetUtilizationRates`, `nvmlDeviceGetMemoryInfo`) to collect `gpuUtil%/vramUsed/vramTotal`
+    - **AMD**: `rocm-smi` / `libdrm` / sysfs-based collection
+    - **Intel**: `intel_gpu_top` / sysfs-based collection
+  - Recommended implementation location: integrate into server-side metrics collection (server task) and expose via `/metrics` and `/metrics/stream`.
+- **Guide Page**
+  - Provides example cards for Curl / JS / React / Python / Java / C# / C++ (collapsed by default)
 
 ---
 
-## 서버 API 요약
+## Server API Summary
 
 - **Health**: `GET /health`
 - **Models (Router Mode)**: `GET /models`
 - **Model control (Router Mode)**
   - `POST /models/load` / `POST /models/unload`
-  - `GET /models/config` / `POST /models/config` (서버 측 `models-config.json`에 저장)
+  - `GET /models/config` / `POST /models/config` (stored in server-side `models-config.json`)
 - **Metrics**
-  - `GET /metrics` (Prometheus 텍스트)
-  - `GET /metrics/stream` (SSE, 실시간 패널용)
-- **GGUF info**: `POST /gguf-info` (서버가 GGUF 파일을 읽고 메타데이터 JSON 반환)
+  - `GET /metrics` (Prometheus text)
+  - `GET /metrics/stream` (SSE, for the real-time panel)
+- **GGUF info**: `POST /gguf-info` (server reads a GGUF file and returns metadata JSON)
 - **UI Auth**
   - `GET /auth/status`
   - `POST /auth/setup`
@@ -67,12 +67,12 @@ llm-server/
 
 ---
 
-## 설치
+## Installation
 
-### 공통 요구사항
+### Common Requirements
 
 - **Node.js**: v18+
-- **CMake** + C/C++ 컴파일 환경
+- **CMake** + a working C/C++ toolchain
 
 ### macOS
 
@@ -91,16 +91,16 @@ sudo apt install -y build-essential cmake
 
 ---
 
-## 빌드
+## Build
 
-### 1) 의존성 설치
+### 1) Install dependencies
 
 ```bash
 npm install
 npm install --prefix frontend
 ```
 
-### 2) llama.cpp 빌드 (llama-server)
+### 2) Build llama.cpp (llama-server)
 
 ```bash
 cd llama.cpp
@@ -112,29 +112,30 @@ cd ../..
 
 ---
 
-## 실행(개발)
+## Run (Development)
 
-### 서버 실행 (Router Mode)
+### Run the server (Router Mode)
 
 ```bash
 npm run server
 ```
 
-기본 실행 옵션(루트 `package.json`):
+Default options (root `package.json`):
+
 - `--port ${LLAMA_PORT:-8080}`
 - `--metrics`
 - `--models-dir "./llama.cpp/models"`
 - `--models-config "./models-config.json"`
 
-### 클라이언트 실행
+### Run the client
 
 ```bash
 npm run client
 ```
 
-- 기본 접속: `http://localhost:5173/`
+- Default URL: `http://localhost:5173/`
 
-### Electron(선택)
+### Electron (optional)
 
 ```bash
 npm run desktop
@@ -142,83 +143,83 @@ npm run desktop
 
 ---
 
-## 설정/데이터 저장 위치
+## Configuration / Data Locations
 
-### 클라이언트 설정
+### Client configuration
 
-- 클라이언트(브라우저/Vite) 모드에서는 모델/활성 모델 등을 **localStorage**에 저장합니다.
+- In client-only mode (browser/Vite), model list and active model are stored in **localStorage**:
   - `llmServerClientConfig`
-  - `modelConfig` (채팅 요청 파라미터용)
+  - `modelConfig` (chat request parameters)
 
-### 서버 설정
+### Server configuration
 
-- `models-config.json`: 모델 로드 옵션(예: `contextSize`, `gpuLayers`)을 서버가 읽고/저장
-- `user_pw.json`: 수퍼관리자 계정 비밀번호 해시 저장 파일 (gitignore)
+- `models-config.json`: server-side per-model load options (e.g., `contextSize`, `gpuLayers`)
+- `user_pw.json`: super-admin password hash file (gitignored)
 
 ---
 
-## 배포(패키징)
+## Deployment (Packaging)
 
-Electron 패키징(선택):
+Electron packaging (optional):
 
 ```bash
 npm run build
 ```
 
-- `frontend`를 프로덕션 빌드하고(`frontend/dist`)
-- `electron-builder`로 패키징합니다.
-- `llama-server` 바이너리는 `extraResources`로 포함됩니다.
+- Builds the `frontend` production bundle (`frontend/dist`)
+- Packages via `electron-builder`
+- Includes the `llama-server` binary via `extraResources`
 
 ---
 
-## 운영/관리 팁
+## Operations Tips
 
-### 수퍼관리자 초기화(계정 삭제)
+### Reset super-admin (delete account)
 
-테스트 계정을 지우고 다시 생성하려면 서버를 중지한 뒤 `user_pw.json`을 삭제하면 됩니다.
+To remove the test account and re-create it, stop the server and delete `user_pw.json`:
 
 ```bash
 rm -f ./user_pw.json
 npm run server
 ```
 
-### 환경 변수
+### Environment variables
 
-- **클라이언트**
-  - `VITE_LLAMACPP_BASE_URL`: API 베이스 URL (기본 `http://localhost:8080`)
-- **서버**
-  - `LLAMA_PORT`: 서버 포트 (기본 8080)
-
----
-
-## 보안 주의
-
-현재 UI 로그인은 **로컬 개발/단일 사용자 환경**을 전제로 한 경량 구현입니다.
-원격/다중 사용자 환경에서 운영할 경우, TLS/정식 인증/세션 저장소/권한 분리 등을 별도로 도입하는 것을 권장합니다.
+- **Client**
+  - `VITE_LLAMACPP_BASE_URL`: API base URL (default `http://localhost:8080`)
+- **Server**
+  - `LLAMA_PORT`: server port (default 8080)
 
 ---
 
-### (추후 구현) 보안 강화 체크리스트
+## Security Notes
 
-- **전송 구간 보호(TLS)**
-  - 외부 노출은 HTTPS(리버스 프록시/Ingress)로만 제공하고, 가능하면 내부 통신도 mTLS 적용
-- **인증/세션 강화**
-  - 고강도 랜덤 세션 토큰(예: 256-bit) + 만료/갱신(슬라이딩/절대 만료) + 로그아웃 시 서버 측 폐기
-  - 동시 세션 수 제한, 로그인/인증 실패에 대한 지연/차단(브루트포스 방어), 감사 로그
-  - 브라우저 배포 시 쿠키 기반 세션(`HttpOnly`/`Secure`/`SameSite`) + CSRF 방어 도입 검토
-- **권한(인가) 분리**
-  - 모델 관리(`/models/*`, `/models/config`), 로그 스트림(`/logs/stream`), 시스템 정보(`/metrics*`) 등 민감 엔드포인트에 역할 기반 권한 정책 적용
-- **비밀번호 저장 방식 개선**
-  - 커스텀 해시 대신 표준 KDF(권장: Argon2id, 대안: bcrypt/scrypt)로 저장 + 파라미터 업그레이드 전략
-- **비밀/키 관리**
-  - `user_pw.json` 등 민감 파일 권한(예: 600)과 저장 경로 하드닝, 백업/복구 절차 정리
-  - 토큰/비밀번호/API 키는 로그/에러 메시지에 절대 출력하지 않도록 마스킹
-- **레이트 리밋/리소스 제한**
-  - `/completion`, 스트리밍 엔드포인트(`/metrics/stream`, `/logs/stream`)에 IP/계정 단위 rate limit
-  - 요청 바디 크기 제한, 동시 스트림 수/동시 요청 수 제한(DoS 완화)
-- **입력 검증/경로 안전**
-  - 모델 경로/ID는 allowlist 디렉토리 내로 제한하고 `..`/심볼릭 링크로 탈출하는 케이스 차단
-  - GGUF 파일/메타데이터 파싱은 크기 제한 및 타임아웃 적용
-- **운영 하드닝**
-  - 기본 바인딩은 `127.0.0.1`로 두고, 외부 노출은 프록시 레이어에서만 제어
-  - 최소 권한 계정으로 실행, 컨테이너 격리(AppArmor/SELinux 등) 및 보안 업데이트/취약점 스캔(SCA) 운영
+The current UI login is a lightweight implementation intended for **local development / single-user** usage.
+For remote or multi-user production environments, you should additionally introduce TLS, proper authentication, durable session storage, and authorization controls.
+
+---
+
+### (Future Work) Security Hardening Checklist
+
+- **Transport security (TLS)**
+  - Expose externally via HTTPS only (reverse proxy/Ingress); consider mTLS for internal traffic
+- **Authentication & session hardening**
+  - Strong random session tokens (e.g., 256-bit) + expiry/refresh (sliding/absolute) + server-side revocation on logout
+  - Limit concurrent sessions; add delay/blocking on repeated auth failures (brute-force defense); audit logging
+  - For browser deployment: consider cookie-based sessions (`HttpOnly`/`Secure`/`SameSite`) and CSRF protection
+- **Authorization (RBAC) separation**
+  - Apply role-based policies for sensitive endpoints such as model management (`/models/*`, `/models/config`), log streaming (`/logs/stream`), and system metrics (`/metrics*`)
+- **Password storage upgrade**
+  - Replace custom hashing with a standard KDF (recommended: Argon2id; alternatives: bcrypt/scrypt) + parameter upgrade strategy
+- **Secrets & key management**
+  - Harden `user_pw.json` permissions (e.g., 600) and storage path; define backup/recovery procedures
+  - Never log tokens/passwords/API keys; mask secrets in logs/errors
+- **Rate limiting & resource limits**
+  - Apply per-IP/per-account rate limiting to `/completion` and streaming endpoints (`/metrics/stream`, `/logs/stream`)
+  - Limit request body size; cap concurrent streams/requests (DoS mitigation)
+- **Input validation & path safety**
+  - Restrict model paths/IDs to an allowlisted directory; prevent `..` and symlink escape
+  - Apply file size limits and timeouts when reading/parsing GGUF metadata
+- **Operational hardening**
+  - Default bind to `127.0.0.1`; expose externally only via a controlled proxy layer
+  - Run as least-privileged user; use container isolation (AppArmor/SELinux); operate security updates and SCA scanning
