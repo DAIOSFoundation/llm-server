@@ -18,6 +18,9 @@ const PerformancePanel = () => {
   const lastTokenTimeRef = useRef(Date.now());
   const tokenCountRef = useRef(0);
   const contextSizeRef = useRef(2048);
+  const lastProcCpuSecondsRef = useRef(null);
+  const lastProcCpuSampleAtRef = useRef(null);
+  const lastPredictedTotalRef = useRef(null);
 
   useEffect(() => {
     // 토큰 속도 업데이트를 위한 전역 이벤트 리스너
@@ -116,7 +119,7 @@ const PerformancePanel = () => {
         }
       } else {
         // Electron이 없으면 llama-server /metrics 기준으로 최소한의 성능 지표만 표시
-        // (CPU/시스템 메모리는 서버 에이전트 없이 브라우저에서 가져올 수 없으므로 0으로 유지)
+        // (라우터 모드에서는 model query param 필요)
         try {
           const config = JSON.parse(localStorage.getItem('modelConfig')) || {};
           const model = encodeURIComponent((config.modelPath || '').trim());
@@ -128,6 +131,12 @@ const PerformancePanel = () => {
             const vramTotalMatch = text.match(/llamacpp:vram_total_bytes\s+([\d.e+\-]+)/);
             const vramUsedMatch = text.match(/llamacpp:vram_used_bytes\s+([\d.e+\-]+)/);
             const tpsMatch = text.match(/llamacpp:predicted_tokens_seconds\s+([\d.e+\-]+)/);
+            const predictedTotalMatch = text.match(/llamacpp:tokens_predicted_total\s+([\d.e+\-]+)/);
+
+            const sysMemTotalMatch = text.match(/llamacpp:system_memory_total_bytes\s+([\d.e+\-]+)/);
+            const sysMemUsedMatch = text.match(/llamacpp:system_memory_used_bytes\s+([\d.e+\-]+)/);
+            const procCpuSecMatch = text.match(/llamacpp:process_cpu_seconds_total\s+([\d.e+\-]+)/);
+            const cpuCoresMatch = text.match(/llamacpp:system_cpu_cores\s+([\d.e+\-]+)/);
 
             if (vramTotalMatch) setVramTotal(Math.round(parseFloat(vramTotalMatch[1])));
             if (vramUsedMatch) setVramUsed(Math.round(parseFloat(vramUsedMatch[1])));
@@ -136,8 +145,47 @@ const PerformancePanel = () => {
               const tps = parseFloat(tpsMatch[1]);
               // 처리량을 0~100으로 단순 스케일(표시용)
               setGpuUsage(Math.max(0, Math.min(100, Math.round(tps))));
+              // 토큰 생성 속도는 metrics 값을 우선 표시 (stream 이벤트가 없어도 갱신됨)
+              setTokenSpeed(Math.max(0, tps));
             } else {
               setGpuUsage(0);
+            }
+
+            if (predictedTotalMatch) {
+              const total = Math.round(parseFloat(predictedTotalMatch[1]));
+              if (lastPredictedTotalRef.current != null) {
+                const delta = Math.max(0, total - lastPredictedTotalRef.current);
+                setTokenCount(delta);
+              }
+              lastPredictedTotalRef.current = total;
+            }
+
+            // system memory usage (%)
+            if (sysMemTotalMatch && sysMemUsedMatch) {
+              const total = parseFloat(sysMemTotalMatch[1]);
+              const used = parseFloat(sysMemUsedMatch[1]);
+              if (total > 0 && used >= 0) {
+                setMemoryUsage(Math.max(0, Math.min(100, (used / total) * 100)));
+              }
+            }
+
+            // process CPU usage (% across all cores)
+            if (procCpuSecMatch) {
+              const now = Date.now();
+              const cpuSec = parseFloat(procCpuSecMatch[1]);
+              const cores = cpuCoresMatch ? Math.max(1, Math.round(parseFloat(cpuCoresMatch[1]))) : 1;
+
+              if (lastProcCpuSecondsRef.current != null && lastProcCpuSampleAtRef.current != null) {
+                const dt = (now - lastProcCpuSampleAtRef.current) / 1000;
+                const dcpu = cpuSec - lastProcCpuSecondsRef.current;
+                if (dt > 0 && dcpu >= 0) {
+                  const pct = (dcpu / dt / cores) * 100;
+                  setCpuUsage(Math.max(0, Math.min(100, pct)));
+                }
+              }
+
+              lastProcCpuSecondsRef.current = cpuSec;
+              lastProcCpuSampleAtRef.current = now;
             }
           }
         } catch (_e) {
