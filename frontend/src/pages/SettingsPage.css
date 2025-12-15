@@ -38,6 +38,7 @@
   cursor: pointer;
   margin-bottom: 0.5rem;
   transition: background-color 0.2s;
+  color: #eee;
 }
 
 .model-list-item:hover {

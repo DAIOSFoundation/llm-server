@@ -129,6 +129,8 @@ const SettingsPage = () => {
 
   const handleSelectModel = (modelId) => {
     setSelectedModelId(modelId);
+    // 드롭다운/저장 기준 active 모델도 함께 갱신
+    setConfig(prev => ({ ...(prev || { models: [], activeModelId: null }), activeModelId: modelId }));
   };
   
   const handleAddNewModel = () => {
@@ -160,14 +162,20 @@ const SettingsPage = () => {
       mirostatEta: 0.1,
       showSpecialTokens: false,
     };
-    const newModels = [...(config.models || []), newModel];
-    setConfig({ ...config, models: newModels });
+    setConfig(prev => {
+      const base = prev || { models: [], activeModelId: null };
+      const nextModels = [...(base.models || []), newModel];
+      return { ...base, models: nextModels, activeModelId: newModel.id };
+    });
     setSelectedModelId(newModel.id);
   };
   
   const handleModelFormChange = (updatedModel) => {
-    const newModels = (config.models || []).map(m => m.id === updatedModel.id ? updatedModel : m);
-    setConfig({ ...config, models: newModels });
+    setConfig(prev => {
+      const base = prev || { models: [], activeModelId: null };
+      const newModels = (base.models || []).map(m => m.id === updatedModel.id ? updatedModel : m);
+      return { ...base, models: newModels };
+    });
   };
   
   const handleDeleteModel = (modelId) => {
@@ -246,6 +254,7 @@ const SettingsPage = () => {
 
   const models = config?.models || [];
   const selectedModel = models.find(m => m.id === selectedModelId);
+  const getModelLabel = (m) => (m?.modelPath || m?.name || m?.id || '').trim();
   
   const descriptionKeys = [
     "accelerator", "gpuLayers", "contextSize", "maxTokens", "temperature", 
@@ -266,7 +275,7 @@ const SettingsPage = () => {
               className={`model-list-item ${selectedModelId === model.id ? 'active' : ''}`}
               onClick={() => handleSelectModel(model.id)}
             >
-              <span className="model-name">{model.name}</span>
+              <span className="model-name">{getModelLabel(model) || '-'}</span>
               <button onClick={(e) => { e.stopPropagation(); handleDeleteModel(model.id); }} className="delete-button">
                 {t('settings.deleteModel')}
               </button>
