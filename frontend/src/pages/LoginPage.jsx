@@ -22,13 +22,12 @@ const LoginPage = () => {
   const [superAdminId, setSuperAdminId] = useState('');
   const [password, setPassword] = useState('');
   const [password2, setPassword2] = useState('');
-  const [password3, setPassword3] = useState('');
   const [busy, setBusy] = useState(false);
 
   const superIdOk = String(superAdminId || '').trim().length > 0;
   const pwPolicyOk = isStrongPassword(password);
-  const pwConfirmFilled = Boolean(password2) || Boolean(password3);
-  const pwMatch = password && password2 && password3 && password === password2 && password2 === password3;
+  const pwConfirmFilled = Boolean(password2);
+  const pwMatch = password && password2 && password === password2;
 
   useEffect(() => {
     if (!auth) return;
@@ -55,7 +54,7 @@ const LoginPage = () => {
       window.alert(t('login.passwordPolicy'));
       return;
     }
-    if (password !== password2 || password !== password3) {
+    if (password !== password2) {
       window.alert(t('login.passwordMismatch'));
       return;
     }
@@ -68,7 +67,6 @@ const LoginPage = () => {
       await auth.setup({ superAdminId, password });
       setPassword('');
       setPassword2('');
-      setPassword3('');
       setMode('verify'); // 검증 화면
     } catch (_err) {
       window.alert(t('login.setupFailed'));
@@ -128,15 +126,6 @@ const LoginPage = () => {
                 type="password"
                 value={password2}
                 onChange={(e) => setPassword2(e.target.value)}
-                placeholder={t('login.passwordPlaceholder')}
-              />
-            </div>
-            <div className="login-row">
-              <label>{t('login.passwordReconfirm')}</label>
-              <input
-                type="password"
-                value={password3}
-                onChange={(e) => setPassword3(e.target.value)}
                 placeholder={t('login.passwordPlaceholder')}
               />
             </div>
