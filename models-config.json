@@ -1,6 +1,6 @@
 {
   "llama31-banyaa-q4_k_m": {
     "contextSize": 2048,
-    "gpuLayers": 0
+    "gpuLayers": -1
   }
 }

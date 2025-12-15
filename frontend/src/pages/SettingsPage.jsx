@@ -31,6 +31,8 @@ const SettingsPage = () => {
     const migrated = (legacyModels || []).map((m, idx) => {
       const ic = m?.inferenceConfig || {};
       const modelId = deriveModelIdFromAnyPath(m?.path) || '';
+      const legacyDevice = String(m?.device || '').toUpperCase();
+      const legacyAccel = (legacyDevice === 'MPS') ? 'mps' : 'auto';
 
       return {
         id: m?.id || `legacy_${Date.now()}_${idx}`,
@@ -38,8 +40,10 @@ const SettingsPage = () => {
         name: m?.name || 'Legacy Model',
         // 라우터 모드에서 쓰는 "모델 ID"
         modelPath: modelId,
-        accelerator: (String(m?.device || '').toUpperCase() === 'MPS') ? 'mps' : 'auto',
-        gpuLayers: 0,
+        accelerator: legacyAccel,
+        // MPS(=Metal)로 쓰던 레거시는 기본적으로 GPU offload를 켜는 것이 자연스럽습니다.
+        // (-1 = auto/최대 offload)
+        gpuLayers: legacyDevice === 'MPS' ? -1 : 0,
         contextSize: ic.contextSize ?? 2048,
         maxTokens: ic.maxTokens ?? 300,
         temperature: ic.temperature ?? 0.7,
@@ -208,7 +212,7 @@ const SettingsPage = () => {
       name: 'New Model',
       modelPath: '',
       accelerator: 'auto',
-      gpuLayers: 0,
+      gpuLayers: -1,
       contextSize: 2048,
       maxTokens: 600,
       temperature: 0.7,
@@ -295,6 +299,13 @@ const SettingsPage = () => {
       const model = String(activeModel.modelPath).trim();
       if (model) {
         try {
+          const accel = String(activeModel.accelerator || 'auto').toLowerCase();
+          const defaultGpuLayers = accel === 'cpu' ? 0 : -1;
+          const gpuLayers =
+            (activeModel.gpuLayers === '' || activeModel.gpuLayers == null)
+              ? defaultGpuLayers
+              : Number(activeModel.gpuLayers);
+
           // 서버에 모델별 로드 설정을 저장 (서버 측 JSON 파일에 기록됨)
           await fetch(`${LLAMA_BASE_URL}/models/config`, {
             method: 'POST',
@@ -303,7 +314,7 @@ const SettingsPage = () => {
               model,
               config: {
                 contextSize: activeModel.contextSize ?? 2048,
-                gpuLayers: activeModel.gpuLayers ?? 0,
+                gpuLayers: Number.isFinite(gpuLayers) ? gpuLayers : defaultGpuLayers,
               },
             }),
             signal: AbortSignal.timeout(2000),
