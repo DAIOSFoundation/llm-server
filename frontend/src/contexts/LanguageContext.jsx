@@ -7,7 +7,7 @@ const translationsData = rawTranslations.default || rawTranslations;
 
 export const LanguageProvider = ({ children }) => {
   const [language, setLanguage] = useState(localStorage.getItem('language') || 'ko');
-  
+
   useEffect(() => {
     localStorage.setItem('language', language);
   }, [language]);
