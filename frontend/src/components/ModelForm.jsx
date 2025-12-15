@@ -48,8 +48,98 @@ const inferQuantizationFromPath = (modelPath) => {
   return { type: 'Unknown', detail: fileName };
 };
 
+const buildQuantizationGuide = (language, quantDetail, quantType) => {
+  const detail = (quantDetail || '').toUpperCase();
+
+  const isKo = language === 'ko';
+
+  const base = {
+    title: isKo ? '옵션 설명' : 'Option Guide',
+    paragraphs: [],
+  };
+
+  if (!detail || detail === '-' || quantType === '-') {
+    base.paragraphs = [
+      isKo
+        ? '모델을 선택하면 파일명 패턴을 기반으로 양자화 정보를 추정하여 표시합니다.'
+        : 'When you select a model, we infer quantization from the filename pattern.',
+      isKo
+        ? '정확한 텐서별(예: Q/K/V) 양자화는 gguf 헤더/텐서 메타데이터 파싱이 필요합니다.'
+        : 'Exact per-tensor (e.g., Q/K/V) quantization requires parsing GGUF metadata.',
+    ];
+    return base;
+  }
+
+  // 공통 설명
+  base.paragraphs.push(
+    isKo
+      ? '표시는 GGUF 파일명에 포함된 태그(Q4_K_M, Q8_0, FP16 등)를 기반으로 합니다.'
+      : 'This is inferred from filename tags (Q4_K_M, Q8_0, FP16, etc.).',
+  );
+
+  // FP16
+  if (detail.includes('FP16') || detail.includes('F16')) {
+    base.paragraphs.push(
+      isKo
+        ? 'FP16은 16-bit 부동소수(half) 정밀도 가중치로, 품질이 좋은 대신 파일/메모리 사용량이 큽니다.'
+        : 'FP16 uses 16-bit floating-point weights: best quality, larger size/VRAM.',
+    );
+    return base;
+  }
+
+  // 8-bit
+  if (detail.includes('Q8_0')) {
+    base.paragraphs.push(
+      isKo
+        ? 'Q8_0은 8-bit 양자화로, 품질 손실이 비교적 적고(대체로 안정적) 4-bit 대비 메모리 사용량은 더 큽니다.'
+        : 'Q8_0 is 8-bit quantization: usually stable quality, more VRAM than 4-bit.',
+    );
+  }
+
+  // Legacy 4-bit (Q4_0, Q4_1)
+  if (detail === 'Q4_0' || detail === 'Q4_1') {
+    base.paragraphs.push(
+      isKo
+        ? 'Q4_0/Q4_1의 “0/1”은 비교적 오래된(legacy) 4-bit 양자화 변형을 의미합니다. 용량은 작지만 최신 K-quant 계열보다 품질이 떨어질 수 있습니다.'
+        : '“0/1” in Q4_0/Q4_1 refers to legacy 4-bit variants. Small size, but may be worse than newer K-quants.',
+    );
+  }
+
+  // K-quants
+  if (detail.includes('_K_')) {
+    base.paragraphs.push(
+      isKo
+        ? '“K”는 K-quant 계열(개선된 양자화)을 의미하며, 같은 비트수에서 품질/속도 균형이 더 좋은 편입니다.'
+        : '“K” indicates the K-quant family (improved quantization), often better quality/throughput balance.',
+    );
+    if (detail.endsWith('_S')) {
+      base.paragraphs.push(
+        isKo
+          ? '“S”는 보통 더 작은 용량(더 공격적인 압축) 쪽으로, 품질 손실이 더 클 수 있습니다.'
+          : '“S” is usually smaller/more aggressive, potentially more quality loss.',
+      );
+    }
+    if (detail.endsWith('_M')) {
+      base.paragraphs.push(
+        isKo
+          ? '“M”은 보통 품질을 더 우선하는 변형으로, 같은 4-bit라도 S보다 품질이 나은 경우가 많습니다.'
+          : '“M” usually prioritizes quality (often better than S at the same bit-width).',
+      );
+    }
+  }
+
+  // q/k/v 용어 설명 (사용자 요청)
+  base.paragraphs.push(
+    isKo
+      ? '참고: “q/k/v”는 어텐션의 Query/Key/Value 가중치 텐서를 의미합니다. 일부 GGUF는 텐서별로 서로 다른 양자화를 혼합할 수 있어, 이를 표시하려면 gguf 내부 메타데이터(텐서 타입)를 직접 읽어야 합니다.'
+      : 'Note: “q/k/v” refer to attention Query/Key/Value tensors. Some GGUFs can mix quantization per tensor; showing that requires parsing GGUF tensor metadata.',
+  );
+
+  return base;
+};
+
 const ModelForm = ({ config, onChange }) => {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [formData, setFormData] = useState({});
 
   useEffect(() => {
@@ -96,6 +186,11 @@ const ModelForm = ({ config, onChange }) => {
   const quantInfo = useMemo(
     () => inferQuantizationFromPath(formData.modelPath),
     [formData.modelPath],
+  );
+
+  const quantGuide = useMemo(
+    () => buildQuantizationGuide(language, quantInfo.detail, quantInfo.type),
+    [language, quantInfo.detail, quantInfo.type],
   );
 
   return (
@@ -151,18 +246,29 @@ const ModelForm = ({ config, onChange }) => {
       {/* Quantization Info Section */}
       <div className="form-section">
         <h3>{t('settings.quantizationInfo')}</h3>
-        <div className="form-grid">
-          <div className="form-group">
-            <label>{t('settings.quantizationType')}</label>
-            <div className="static-value">
-              {quantInfo.type || '-'}
+        <div className="quantization-grid">
+          <div className="quantization-left">
+            <div className="form-group">
+              <label>{t('settings.quantizationType')}</label>
+              <div className="static-value">
+                {quantInfo.type || '-'}
+              </div>
+            </div>
+            <div className="form-group">
+              <label>{t('settings.quantizationDetail')}</label>
+              <div className="static-value">
+                {quantInfo.detail || '-'}
+              </div>
             </div>
           </div>
-          <div className="form-group">
-            <label>{t('settings.quantizationDetail')}</label>
-            <div className="static-value">
-              {quantInfo.detail || '-'}
+
+          <div className="quantization-description">
+            <div className="quantization-description-title">
+              {t('settings.quantizationGuide')}
             </div>
+            {quantGuide.paragraphs.map((p, idx) => (
+              <p key={idx} className="quantization-description-paragraph">{p}</p>
+            ))}
           </div>
         </div>
       </div>
