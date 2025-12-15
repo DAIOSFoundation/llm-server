@@ -295,6 +295,20 @@ const SettingsPage = () => {
       const model = String(activeModel.modelPath).trim();
       if (model) {
         try {
+          // 서버에 모델별 로드 설정을 저장 (서버 측 JSON 파일에 기록됨)
+          await fetch(`${LLAMA_BASE_URL}/models/config`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model,
+              config: {
+                contextSize: activeModel.contextSize ?? 2048,
+                gpuLayers: activeModel.gpuLayers ?? 0,
+              },
+            }),
+            signal: AbortSignal.timeout(2000),
+          }).catch(() => {});
+
           // unload는 실패해도 무시(이미 안 떠있을 수 있음)
           await fetch(`${LLAMA_BASE_URL}/models/unload`, {
             method: 'POST',
