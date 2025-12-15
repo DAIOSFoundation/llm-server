@@ -184,11 +184,47 @@ const PerformancePanel = () => {
     if (window.electronAPI && window.electronAPI.getSystemMetrics) return;
     if (typeof EventSource === 'undefined') return;
 
-    const connect = () => {
-      const modelId = getActiveModelIdForMetrics();
-      if (!modelId) return;
+    let stopped = false;
+    let reconnectTimer = null;
+    let probeTimer = null;
+    let currentModelId = '';
 
-      const url = `${LLAMA_BASE_URL}/metrics/stream?model=${encodeURIComponent(modelId)}&interval_ms=1000`;
+    const close = () => {
+      if (eventSourceRef.current) {
+        try { eventSourceRef.current.close(); } catch (_e) {}
+        eventSourceRef.current = null;
+      }
+    };
+
+    const scheduleReconnect = (delayMs = 1000) => {
+      if (stopped) return;
+      if (reconnectTimer) return;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delayMs);
+    };
+
+    const connect = () => {
+      if (stopped) return;
+
+      const modelId = getActiveModelIdForMetrics();
+      if (!modelId) {
+        currentModelId = '';
+        close();
+        return;
+      }
+
+      // already connected for this model
+      if (eventSourceRef.current && currentModelId === modelId) {
+        return;
+      }
+
+      currentModelId = modelId;
+      close();
+
+      // autoload=1 ensures router spawns the model process even if not already loaded
+      const url = `${LLAMA_BASE_URL}/metrics/stream?model=${encodeURIComponent(modelId)}&interval_ms=1000&autoload=1`;
       const es = new EventSource(url);
       eventSourceRef.current = es;
 
@@ -236,15 +272,19 @@ const PerformancePanel = () => {
           // ignore
         }
       });
+
+      // if the SSE connection drops (e.g. router/model restart), retry automatically
+      es.onerror = () => {
+        close();
+        scheduleReconnect(1000);
+      };
     };
 
     // connect immediately and reconnect when config changes
     connect();
     const onConfigUpdated = () => {
-      if (eventSourceRef.current) {
-        try { eventSourceRef.current.close(); } catch (_e) {}
-        eventSourceRef.current = null;
-      }
+      currentModelId = '';
+      close();
       connect();
     };
 
@@ -252,14 +292,24 @@ const PerformancePanel = () => {
     window.addEventListener('config-updated', onConfigUpdated);
     window.addEventListener('storage', onConfigUpdated);
 
+    // Fallback: when localStorage is updated in the same tab, the 'storage' event doesn't fire.
+    // Probe the active model id locally and connect once it becomes available.
+    probeTimer = window.setInterval(() => {
+      if (stopped) return;
+      const modelId = getActiveModelIdForMetrics();
+      if (modelId && (!eventSourceRef.current || modelId !== currentModelId)) {
+        connect();
+      }
+    }, 1000);
+
     return () => {
+      stopped = true;
       window.removeEventListener('client-config-updated', onConfigUpdated);
       window.removeEventListener('config-updated', onConfigUpdated);
       window.removeEventListener('storage', onConfigUpdated);
-      if (eventSourceRef.current) {
-        try { eventSourceRef.current.close(); } catch (_e) {}
-        eventSourceRef.current = null;
-      }
+      if (probeTimer) window.clearInterval(probeTimer);
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      close();
     };
   }, []);
 
