@@ -367,7 +367,14 @@ const PerformancePanel = () => {
           />
         </svg>
         <div className="gauge-label">
-          <div className="gauge-value">{Math.round(value)}%</div>
+          <div className="gauge-value">
+            {(() => {
+              const v = Number.isFinite(value) ? value : 0;
+              // 작은 값(유휴 상태에서도 발생하는 미세 사용률)이 0%로 보이지 않도록 소수점 표기
+              const digits = v < 1 ? 2 : v < 10 ? 1 : 0;
+              return `${v.toFixed(digits)}%`;
+            })()}
+          </div>
           <div className="gauge-name">{label}</div>
         </div>
       </div>
