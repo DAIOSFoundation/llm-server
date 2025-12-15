@@ -54,9 +54,7 @@ const buildQuantizationSummaryLines = (language, ggufInfo) => {
   // 읽기 실패/미지원: 간단히만 표시
   if (!ggufInfo) return [];
   if (ggufInfo.ok === false) {
-    return [
-      isKo ? 'GGUF 메타데이터를 읽지 못했습니다.' : 'Failed to read GGUF metadata.',
-    ];
+    return [];
   }
 
   const lines = [];
@@ -226,8 +224,8 @@ const ModelForm = ({ config, onChange }) => {
             type="text"
             name="modelPath"
             value={formData.modelPath || ''}
-            readOnly
-            placeholder="No model selected"
+            onChange={handleChange}
+            placeholder={t('settings.modelPathPlaceholder')}
             autoComplete="off"
           />
           <button
