@@ -4,6 +4,7 @@ import { LanguageProvider } from './contexts/LanguageContext';
 import Header from './components/Header';
 import ChatPage from './pages/ChatPage';
 import SettingsPage from './pages/SettingsPage';
+import GuidePage from './pages/GuidePage';
 import './App.css';
 
 function App() {
@@ -16,6 +17,7 @@ function App() {
             <Routes>
               <Route path="/" element={<ChatPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/guide" element={<GuidePage />} />
             </Routes>
           </main>
         </div>

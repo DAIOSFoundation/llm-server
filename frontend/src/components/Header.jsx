@@ -122,6 +122,9 @@ const Header = () => {
           <NavLink to="/" className={({ isActive }) => (isActive ? 'active' : '')}>
             Chat
           </NavLink>
+          <NavLink to="/guide" className={({ isActive }) => (isActive ? 'active' : '')}>
+            {t('header.guide')}
+          </NavLink>
           <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
             {t('header.settings')}
           </NavLink>
