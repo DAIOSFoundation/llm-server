@@ -210,14 +210,11 @@ const SettingsPage = () => {
       window.dispatchEvent(new CustomEvent('config-updated'));
     }
 
-    // 서버 재기동(라우터 모드): active model을 unload/load 해서 설정(-c, -ngl)을 반영
+    // 서버 재기동(라우터 모드): active model을 unload/load 해서 모델 로드 상태를 갱신
+    // NOTE: 현재 llama-server 빌드에서는 extra_args(추가 실행 인자) 전달 기능을 사용하지 않습니다.
     if (!window.electronAPI && activeModel && activeModel.modelPath) {
       const model = String(activeModel.modelPath).trim();
       if (model) {
-        const extraArgs = [];
-        if (activeModel.contextSize) extraArgs.push('-c', String(activeModel.contextSize));
-        if (activeModel.gpuLayers !== undefined && activeModel.gpuLayers !== null) extraArgs.push('-ngl', String(activeModel.gpuLayers));
-
         try {
           // unload는 실패해도 무시(이미 안 떠있을 수 있음)
           await fetch(`${LLAMA_BASE_URL}/models/unload`, {
@@ -230,7 +227,7 @@ const SettingsPage = () => {
           await fetch(`${LLAMA_BASE_URL}/models/load`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, extra_args: extraArgs }),
+            body: JSON.stringify({ model }),
             signal: AbortSignal.timeout(5000),
           }).catch(() => {});
         } catch (_e) {

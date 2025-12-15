@@ -5,7 +5,7 @@
   "main": "main.js",
   "scripts": {
     "client": "npm run dev --prefix frontend",
-    "server": "./llama.cpp/build/bin/llama-server --port ${LLAMA_PORT:-8080} --metrics --models-dir \"./llama.cpp/models\" --models-allow-extra-args",
+    "server": "./llama.cpp/build/bin/llama-server --port ${LLAMA_PORT:-8080} --metrics --models-dir \"./llama.cpp/models\"",
     "desktop": "wait-on http://localhost:5173 && electron .",
     "start": "npm run client",
     "build": "npm run build:native && vite build --prefix frontend && electron-builder",
