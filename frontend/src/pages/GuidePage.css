@@ -68,9 +68,44 @@
   border-bottom: 1px solid #2a2a2a;
 }
 
+.guide-card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .guide-card-header h3 {
   margin: 0 0 6px;
   font-size: 1.15rem;
+}
+
+.guide-toggle-button {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid #333;
+  background: #101010;
+  color: #eee;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.guide-toggle-button:hover {
+  border-color: #4CAF50;
+}
+
+.guide-chevron {
+  display: inline-block;
+  transition: transform 0.15s ease;
+  transform: rotate(-90deg); /* collapsed */
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.guide-chevron.open {
+  transform: rotate(0deg); /* expanded */
 }
 
 .guide-card-header p {

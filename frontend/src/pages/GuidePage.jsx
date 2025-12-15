@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { LLAMA_BASE_URL } from '../services/api';
 import './GuidePage.css';
@@ -22,16 +22,30 @@ const getExampleModelId = () => {
   return 'llama31-banyaa-q4_k_m';
 };
 
-const CodeCard = ({ title, description, code }) => {
+const CodeCard = ({ title, description, code, isOpen, onToggle }) => {
   return (
     <section className="guide-card">
       <div className="guide-card-header">
-        <h3>{title}</h3>
+        <div className="guide-card-title-row">
+          <h3>{title}</h3>
+          <button
+            type="button"
+            className="guide-toggle-button"
+            onClick={onToggle}
+            aria-expanded={isOpen}
+            aria-label={isOpen ? 'collapse' : 'expand'}
+            title={isOpen ? '접기' : '펼치기'}
+          >
+            <span className={`guide-chevron ${isOpen ? 'open' : ''}`}>▾</span>
+          </button>
+        </div>
         {description ? <p>{description}</p> : null}
       </div>
-      <pre className="guide-code">
-        <code>{code}</code>
-      </pre>
+      {isOpen ? (
+        <pre className="guide-code">
+          <code>{code}</code>
+        </pre>
+      ) : null}
     </section>
   );
 };
@@ -294,6 +308,14 @@ int main() {
     ];
   }, [t, modelId]);
 
+  // default: collapsed
+  const [openCards, setOpenCards] = useState(() => ({}));
+
+  const isCardOpen = (key) => Boolean(openCards[key]);
+  const toggleCard = (key) => {
+    setOpenCards((prev) => ({ ...(prev || {}), [key]: !prev?.[key] }));
+  };
+
   return (
     <div className="guide-page">
       <div className="guide-header">
@@ -314,7 +336,14 @@ int main() {
 
       <div className="guide-grid">
         {cards.map((c) => (
-          <CodeCard key={c.key} title={c.title} description={c.description} code={c.code} />
+          <CodeCard
+            key={c.key}
+            title={c.title}
+            description={c.description}
+            code={c.code}
+            isOpen={isCardOpen(c.key)}
+            onToggle={() => toggleCard(c.key)}
+          />
         ))}
       </div>
     </div>
