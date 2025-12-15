@@ -142,23 +142,12 @@ const ModelForm = ({ config, onChange }) => {
     const looksLikePath = trimmed.includes('/') || trimmed.includes('\\') || trimmed.endsWith('.gguf');
     const modelId = trimmed.replace(/\.gguf$/i, '');
 
-    let ggufPath = trimmed;
-    if (!looksLikePath) {
-      const listRes = await fetch(`${LLAMA_BASE_URL}/models`, { signal: AbortSignal.timeout(2000) });
-      const listJson = await listRes.json().catch(() => null);
-      const items = listJson && Array.isArray(listJson.data) ? listJson.data : [];
-      const found = items.find((m) => m && m.id === modelId);
-      if (found && found.path) {
-        ggufPath = found.path;
-      } else {
-        return null;
-      }
-    }
-
     const res = await fetch(`${LLAMA_BASE_URL}/gguf-info`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: ggufPath }),
+      body: looksLikePath
+        ? JSON.stringify({ path: trimmed })
+        : JSON.stringify({ model: modelId }),
       signal: AbortSignal.timeout(3000),
     });
     const info = await res.json().catch(() => null);
@@ -204,29 +193,16 @@ const ModelForm = ({ config, onChange }) => {
     try {
       // 라우터 모드에서는 modelPath에 "모델 ID"가 들어갑니다.
       // - 절대/상대 경로(슬래시 포함)면 그대로 GGUF 경로로 간주
-      // - 그 외에는 /models에서 id를 찾아 path로 변환해서 메타데이터를 읽습니다.
+      // - 그 외에는 서버가 --models-dir 기준으로 id를 gguf 경로로 해석합니다.
       const looksLikePath = raw.includes('/') || raw.includes('\\') || raw.endsWith('.gguf');
       const modelId = raw.replace(/\.gguf$/i, '');
-
-      let ggufPath = raw;
-      if (!looksLikePath) {
-        const listRes = await fetch(`${LLAMA_BASE_URL}/models`, { signal: AbortSignal.timeout(2000) });
-        const listJson = await listRes.json().catch(() => null);
-        const items = listJson && Array.isArray(listJson.data) ? listJson.data : [];
-        const found = items.find((m) => m && m.id === modelId);
-        if (found && found.path) {
-          ggufPath = found.path;
-        } else {
-          setGgufInfo(null);
-          setPathCheck({ status: 'error', message: t('settings.verifyPathFail') });
-          return;
-        }
-      }
 
       const res = await fetch(`${LLAMA_BASE_URL}/gguf-info`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: ggufPath }),
+        body: looksLikePath
+          ? JSON.stringify({ path: raw })
+          : JSON.stringify({ model: modelId }),
         signal: AbortSignal.timeout(3000),
       });
 
