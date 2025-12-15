@@ -40,3 +40,6 @@ models/
 tmp/
 temp/
 *.tmp
+
+# UI auth file (contains password hash)
+user_pw.json

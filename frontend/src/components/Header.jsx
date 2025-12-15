@@ -2,10 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
 import LanguageSelector from './LanguageSelector';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useAuth } from '../contexts/AuthContext';
 import './Header.css';
 
 const Header = () => {
   const { t } = useLanguage();
+  const auth = useAuth();
   const [config, setConfig] = useState({ models: [], activeModelId: null });
   const [isDropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -155,7 +157,20 @@ const Header = () => {
 
       <div className="header-right">
         <LanguageSelector />
-        {/* Login button can be added here */}
+        {auth?.authenticated ? (
+          <button
+            className="logout-icon-button"
+            title={t('header.logout')}
+            onClick={() => auth.logout()}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M10 17v-2h4v-6h-4V7l-5 5 5 5zm9-14h-8v2h8v14h-8v2h8a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"
+              />
+            </svg>
+          </button>
+        ) : null}
       </div>
     </header>
   );

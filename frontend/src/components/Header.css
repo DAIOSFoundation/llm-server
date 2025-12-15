@@ -29,6 +29,24 @@
   justify-content: flex-end;
 }
 
+.logout-icon-button {
+  margin-left: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid #555;
+  background: #333;
+  color: #eee;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.logout-icon-button:hover {
+  border-color: #4CAF50;
+  color: #fff;
+}
+
 .app-header h1 {
   font-size: 1.5rem;
   margin-right: 2rem;
