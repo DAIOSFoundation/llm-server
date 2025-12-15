@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { LLAMA_BASE_URL } from '../services/api';
 
 const AuthContext = createContext(null);
@@ -30,8 +30,11 @@ export const AuthProvider = ({ children }) => {
   const [superAdminId, setSuperAdminId] = useState('');
   const [authenticated, setAuthenticated] = useState(false);
   const [loading, setLoading] = useState(true);
+  const refreshInFlightRef = useRef(false);
 
   const refreshStatus = async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     setLoading(true);
     try {
       const token = getToken();
@@ -57,6 +60,7 @@ export const AuthProvider = ({ children }) => {
       setAuthenticated(false);
     } finally {
       setLoading(false);
+      refreshInFlightRef.current = false;
     }
   };
 
@@ -124,7 +128,19 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     refreshStatus();
+    const onFocus = () => refreshStatus();
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        refreshStatus();
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, []);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
