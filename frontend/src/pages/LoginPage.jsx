@@ -132,7 +132,7 @@ const LoginPage = () => {
               />
             </div>
             <button className="login-button" type="submit" disabled={busy}>
-              {busy ? t('login.working') : t('login.setup')}
+              {busy ? t('login.working') : t('login.create')}
             </button>
           </form>
         ) : null}
