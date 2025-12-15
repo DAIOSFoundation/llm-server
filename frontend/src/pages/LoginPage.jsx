@@ -67,7 +67,8 @@ const LoginPage = () => {
       await auth.setup({ superAdminId, password });
       setPassword('');
       setPassword2('');
-      setMode('verify'); // 검증 화면
+      // If setup succeeded, the account exists now -> show login screen.
+      setMode('login');
     } catch (_err) {
       window.alert(t('login.setupFailed'));
     } finally {

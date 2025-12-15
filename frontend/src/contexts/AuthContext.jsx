@@ -38,7 +38,9 @@ export const AuthProvider = ({ children }) => {
       const res = await fetch(`${LLAMA_BASE_URL}/auth/status`, {
         method: 'GET',
         headers: token ? { 'X-LLM-UI-Auth': token } : {},
-        signal: AbortSignal.timeout(2000),
+        // Router mode can be busy (model load / IO). Avoid flipping UI to "not initialized"
+        // due to transient timeouts.
+        signal: AbortSignal.timeout(5000),
       });
       if (res.ok) {
         const json = await res.json();
@@ -46,13 +48,12 @@ export const AuthProvider = ({ children }) => {
         setSuperAdminId(String(json.superAdminId || ''));
         setAuthenticated(Boolean(json.authenticated));
       } else {
-        setInitialized(false);
-        setSuperAdminId('');
+        // Keep previous initialized state on non-OK responses.
+        // We only reset authenticated because a failed status check means "not logged in".
         setAuthenticated(false);
       }
     } catch (_e) {
-      setInitialized(false);
-      setSuperAdminId('');
+      // Keep previous initialized/superAdminId on transient network failures.
       setAuthenticated(false);
     } finally {
       setLoading(false);
