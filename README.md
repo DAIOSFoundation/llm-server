@@ -35,6 +35,14 @@ llm-server/
   - 설정 로드 시 모델 ID가 있으면 **자동으로 메타데이터를 조회**해 요약을 표시
 - **실시간 성능 지표(푸시 기반)**
   - `GET /metrics/stream`(SSE)로 VRAM/메모리/CPU/토큰 속도 등을 **폴링 없이** 갱신
+- **GPU “사용률(연산 바쁨%)”**
+  - 현재 UI의 GPU 게이지는 **실제 GPU 연산 사용률이 아니라 VRAM 점유율(%)**을 표시합니다.
+  - `llama.cpp` 기본 metrics에는 플랫폼 공통의 “GPU 바쁨%” 지표가 없어서, 현 시점에서는 **Linux 서비스 환경을 기준으로 별도 구현이 필요**합니다.
+  - (향후) Linux에서는 다음 중 한 가지 방식으로 GPU 사용률을 구현하는 것이 현실적입니다.
+    - **NVIDIA**: `NVML`(예: `nvmlDeviceGetUtilizationRates`, `nvmlDeviceGetMemoryInfo`) 기반으로 `gpuUtil%/vramUsed/vramTotal` 수집
+    - **AMD**: `rocm-smi` / `libdrm` / sysfs 기반 수집
+    - **Intel**: `intel_gpu_top`/sysfs 기반 수집
+  - 구현 위치는 “서버 측 metrics 수집(server task)”에 통합하여 `/metrics` 및 `/metrics/stream`에 포함시키는 방향을 권장합니다.
 - **가이드 페이지**
   - Curl/JS/React/Python/Java/C#/C++ 예제 카드 제공(기본 접힘)
 
