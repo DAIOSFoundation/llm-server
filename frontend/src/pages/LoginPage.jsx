@@ -25,6 +25,11 @@ const LoginPage = () => {
   const [password3, setPassword3] = useState('');
   const [busy, setBusy] = useState(false);
 
+  const superIdOk = String(superAdminId || '').trim().length > 0;
+  const pwPolicyOk = isStrongPassword(password);
+  const pwConfirmFilled = Boolean(password2) || Boolean(password3);
+  const pwMatch = password && password2 && password3 && password === password2 && password2 === password3;
+
   useEffect(() => {
     if (!auth) return;
     if (auth.loading) {
@@ -52,6 +57,10 @@ const LoginPage = () => {
     }
     if (password !== password2 || password !== password3) {
       window.alert(t('login.passwordMismatch'));
+      return;
+    }
+    if (!superIdOk) {
+      window.alert(t('login.superAdminIdRequired'));
       return;
     }
     setBusy(true);
@@ -131,6 +140,8 @@ const LoginPage = () => {
                 placeholder={t('login.passwordPlaceholder')}
               />
             </div>
+            {!pwPolicyOk && password ? <div className="login-hint">{t('login.passwordPolicy')}</div> : null}
+            {pwConfirmFilled && !pwMatch ? <div className="login-error">{t('login.passwordMismatch')}</div> : null}
             <button className="login-button" type="submit" disabled={busy}>
               {busy ? t('login.working') : t('login.create')}
             </button>
