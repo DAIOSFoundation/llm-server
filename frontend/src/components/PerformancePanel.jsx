@@ -319,9 +319,9 @@ const PerformancePanel = () => {
     );
   };
 
-  // 토큰 속도 램프 (20개) - 그라데이션 색상
+  // 토큰 속도 램프 (15개) - 그라데이션 색상
   const TokenSpeedLamps = ({ speed, maxSpeed = 100 }) => {
-    const numLamps = 20;
+    const numLamps = 15;
     const activeLamps = Math.min(Math.round((speed / maxSpeed) * numLamps), numLamps);
     
     // 인덱스에 따라 색상 계산 (0: 파란색, 중간: 노란색, 끝: 빨간색)
