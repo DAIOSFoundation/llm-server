@@ -155,12 +155,6 @@ const ModelForm = ({ config, onChange }) => {
     }
   };
   
-  const handleNameChange = (e) => {
-    const newFormData = { ...formData, name: e.target.value };
-    setFormData(newFormData);
-    onChange(newFormData);
-  }
-
   // 양자화 정보: 1) GGUF 메타데이터 기반 (우선) 2) 파일명 추정 (fallback)
   const quantInfo = useMemo(() => {
     if (ggufInfo && ggufInfo.ok) {
@@ -224,13 +218,7 @@ const ModelForm = ({ config, onChange }) => {
         </div>
       </div>
       
-      {/* Model Name and Path */}
-      <div className="form-section">
-        <h3>{t('settings.modelName')}</h3>
-        <div className="form-group">
-           <input type="text" name="name" value={formData.name || ''} onChange={handleNameChange} className="model-name-input" autoComplete="off" />
-        </div>
-      </div>
+      {/* Model Path */}
       <div className="form-section">
         <h3>{t('settings.modelPath')}</h3>
         <div className="form-group model-path-group">
