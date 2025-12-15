@@ -1,6 +1,52 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useLanguage } from '../contexts/LanguageContext';
 import './ModelForm.css';
+
+// GGUF 모델 경로(파일명)를 기반으로 양자화 정보를 추정하는 헬퍼
+// NOTE: 1차 버전은 파일명 패턴(FP16, Q8_0, Q4_K_M 등)에 기반한 추정입니다.
+// 나중에 필요하다면 gguf 헤더를 직접 파싱하는 방식으로 확장할 수 있습니다.
+const inferQuantizationFromPath = (modelPath) => {
+  if (!modelPath) {
+    return { type: '-', detail: '-' };
+  }
+
+  const fileName = modelPath.split(/[\\/]/).pop() || '';
+  const upper = fileName.toUpperCase();
+
+  // FP16 / F16
+  if (upper.includes('FP16') || upper.includes('F16')) {
+    return { type: 'FP16', detail: 'FP16' };
+  }
+
+  // 8-bit
+  if (upper.includes('Q8_0')) {
+    return { type: '8-bit', detail: 'Q8_0' };
+  }
+
+  // 4-bit 계열 (Q4_0, Q4_1, Q4_K_M, Q4_K_S 등)
+  const q4Match = upper.match(/Q4_([A-Z0-9_]+)/);
+  if (q4Match) {
+    const variant = q4Match[1]; // 예: "0", "K_M", "K_S"
+    return {
+      type: '4-bit',
+      detail: `Q4_${variant}`,
+    };
+  }
+
+  // 기타 Qx_ 계열 (Q5_0, Q5_1 등)
+  const qMatch = upper.match(/Q([0-9])_([A-Z0-9_]+)/);
+  if (qMatch) {
+    const bits = qMatch[1];
+    const variant = qMatch[2];
+    return {
+      type: `${bits}-bit`,
+      detail: `Q${bits}_${variant}`,
+    };
+  }
+
+  // 알 수 없는 경우
+  return { type: 'Unknown', detail: fileName };
+};
 
 const ModelForm = ({ config, onChange }) => {
   const { t } = useLanguage();
@@ -46,6 +92,12 @@ const ModelForm = ({ config, onChange }) => {
     onChange(newFormData);
   }
 
+  // 양자화 정보 추정 (modelPath 변경 시 자동 갱신)
+  const quantInfo = useMemo(
+    () => inferQuantizationFromPath(formData.modelPath),
+    [formData.modelPath],
+  );
+
   return (
     <div className="model-form">
       {/* Acceleration Section */}
@@ -78,8 +130,40 @@ const ModelForm = ({ config, onChange }) => {
       <div className="form-section">
         <h3>{t('settings.modelPath')}</h3>
         <div className="form-group model-path-group">
-          <input type="text" name="modelPath" value={formData.modelPath || ''} readOnly placeholder="No model selected" autoComplete="off" />
-          <button type="button" onClick={handleFindModel} className="find-button">{t('settings.findModel')}</button>
+          <input
+            type="text"
+            name="modelPath"
+            value={formData.modelPath || ''}
+            readOnly
+            placeholder="No model selected"
+            autoComplete="off"
+          />
+          <button
+            type="button"
+            onClick={handleFindModel}
+            className="find-button"
+          >
+            {t('settings.findModel')}
+          </button>
+        </div>
+      </div>
+
+      {/* Quantization Info Section */}
+      <div className="form-section">
+        <h3>{t('settings.quantizationInfo')}</h3>
+        <div className="form-grid">
+          <div className="form-group">
+            <label>{t('settings.quantizationType')}</label>
+            <div className="static-value">
+              {quantInfo.type || '-'}
+            </div>
+          </div>
+          <div className="form-group">
+            <label>{t('settings.quantizationDetail')}</label>
+            <div className="static-value">
+              {quantInfo.detail || '-'}
+            </div>
+          </div>
         </div>
       </div>
       
