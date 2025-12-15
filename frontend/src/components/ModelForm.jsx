@@ -91,6 +91,7 @@ const ModelForm = ({ config, onChange }) => {
   const { t, language } = useLanguage();
   const [formData, setFormData] = useState({});
   const [ggufInfo, setGgufInfo] = useState(null);
+  const [pathCheck, setPathCheck] = useState({ status: 'idle', message: '' }); // idle | checking | ok | error
 
   useEffect(() => {
     const defaults = {
@@ -105,31 +106,10 @@ const ModelForm = ({ config, onChange }) => {
     setFormData({ ...defaults, ...config });
   }, [config]);
 
-  // GGUF 메타데이터 읽기 (modelPath 변경 시)
+  // modelPath 변경 시: 기존 검증/메타데이터 상태 초기화
   useEffect(() => {
-    let cancelled = false;
-
-    const run = async () => {
-      const modelPath = formData.modelPath;
-      if (!modelPath || !window.electronAPI || !window.electronAPI.getGgufInfo) {
-        setGgufInfo(null);
-        return;
-      }
-
-      try {
-        const info = await window.electronAPI.getGgufInfo(modelPath);
-        if (!cancelled) {
-          setGgufInfo(info && info.ok ? info : info);
-        }
-      } catch (_e) {
-        if (!cancelled) {
-          setGgufInfo({ ok: false, error: 'Failed to read GGUF metadata' });
-        }
-      }
-    };
-
-    run();
-    return () => { cancelled = true; };
+    setGgufInfo(null);
+    setPathCheck({ status: 'idle', message: '' });
   }, [formData.modelPath]);
 
   const handleChange = (e) => {
@@ -140,6 +120,39 @@ const ModelForm = ({ config, onChange }) => {
     };
     setFormData(newFormData);
     onChange(newFormData);
+  };
+
+  const handleVerifyPath = async () => {
+    const modelPath = (formData.modelPath || '').trim();
+    if (!modelPath) {
+      setPathCheck({ status: 'error', message: t('settings.verifyPathEmpty') });
+      setGgufInfo(null);
+      return;
+    }
+
+    if (!window.electronAPI || !window.electronAPI.getGgufInfo) {
+      setPathCheck({ status: 'error', message: t('settings.verifyPathUnavailable') });
+      setGgufInfo(null);
+      return;
+    }
+
+    setPathCheck({ status: 'checking', message: '' });
+    try {
+      const info = await window.electronAPI.getGgufInfo(modelPath);
+      if (info && info.ok) {
+        setGgufInfo(info);
+        setPathCheck({ status: 'ok', message: t('settings.verifyPathOk') });
+      } else {
+        setGgufInfo(null);
+        setPathCheck({
+          status: 'error',
+          message: (info && info.error) ? info.error : t('settings.verifyPathFail'),
+        });
+      }
+    } catch (_e) {
+      setGgufInfo(null);
+      setPathCheck({ status: 'error', message: t('settings.verifyPathFail') });
+    }
   };
   
   // 양자화 정보: 1) GGUF 메타데이터 기반 (우선) 2) 파일명 추정 (fallback)
@@ -209,14 +222,31 @@ const ModelForm = ({ config, onChange }) => {
       <div className="form-section">
         <h3>{t('settings.modelPath')}</h3>
         <div className="form-group">
-          <input
-            type="text"
-            name="modelPath"
-            value={formData.modelPath || ''}
-            onChange={handleChange}
-            placeholder={t('settings.modelPathPlaceholder')}
-            autoComplete="off"
-          />
+          <div className="model-path-row">
+            <input
+              type="text"
+              name="modelPath"
+              value={formData.modelPath || ''}
+              onChange={handleChange}
+              placeholder={t('settings.modelPathPlaceholder')}
+              autoComplete="off"
+            />
+            <button
+              type="button"
+              className="verify-button"
+              onClick={handleVerifyPath}
+              disabled={pathCheck.status === 'checking'}
+              title={t('settings.verifyPath')}
+            >
+              {pathCheck.status === 'checking' ? t('settings.verifying') : t('settings.verifyPath')}
+            </button>
+          </div>
+          {pathCheck.status === 'error' && (
+            <div className="path-status error">{pathCheck.message}</div>
+          )}
+          {pathCheck.status === 'ok' && (
+            <div className="path-status ok">{pathCheck.message}</div>
+          )}
         </div>
       </div>
 
