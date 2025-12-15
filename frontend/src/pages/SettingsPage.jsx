@@ -196,6 +196,8 @@ const SettingsPage = () => {
       }
     } else {
       saveClientConfig(configToSave);
+      // Header 드롭다운이 즉시 갱신되도록 이벤트로 알림
+      window.dispatchEvent(new CustomEvent('client-config-updated', { detail: { config: configToSave } }));
     }
 
     // 설정 저장 후 localStorage에 저장 (Chat/Performance가 읽을 수 있도록)

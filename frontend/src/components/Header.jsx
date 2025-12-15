@@ -12,7 +12,16 @@ const Header = () => {
   const STORAGE_KEY = 'llmServerClientConfig';
 
   useEffect(() => {
-    const loadConfig = async () => {
+    const loadConfig = async (maybeConfig) => {
+      if (maybeConfig && maybeConfig.models) {
+        // ensure activeModelId exists if models exist
+        const cfg = { ...maybeConfig };
+        if (!cfg.activeModelId && Array.isArray(cfg.models) && cfg.models.length > 0) {
+          cfg.activeModelId = cfg.models[0].id;
+        }
+        setConfig(cfg);
+        return;
+      }
       if (window.electronAPI) {
         const loadedConfig = await window.electronAPI.loadConfig();
         // Ensure loadedConfig and its models property are not null/undefined
@@ -34,6 +43,29 @@ const Header = () => {
       }
     };
     loadConfig();
+
+    const handleClientConfigUpdated = (event) => {
+      const next = event?.detail?.config;
+      if (next) loadConfig(next);
+    };
+
+    const handleStorage = (event) => {
+      if (event && event.key === STORAGE_KEY) {
+        try {
+          if (event.newValue) {
+            const parsed = JSON.parse(event.newValue);
+            if (parsed && parsed.models) {
+              loadConfig(parsed);
+            }
+          }
+        } catch (_e) {
+          // ignore
+        }
+      }
+    };
+
+    window.addEventListener('client-config-updated', handleClientConfigUpdated);
+    window.addEventListener('storage', handleStorage);
     
     const handleClickOutside = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -41,7 +73,11 @@ const Header = () => {
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    return () => {
+      window.removeEventListener('client-config-updated', handleClientConfigUpdated);
+      window.removeEventListener('storage', handleStorage);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
   }, []);
   
   const handleSelectModel = async (modelId) => {
@@ -76,6 +112,7 @@ const Header = () => {
   // Defensive coding: ensure config and config.models exist before trying to use them
   const models = config?.models || [];
   const activeModel = models.find(m => m.id === config?.activeModelId);
+  const getModelLabel = (m) => (m?.modelPath || m?.name || '').trim();
 
   return (
     <header className="app-header">
@@ -94,7 +131,7 @@ const Header = () => {
       <div className="header-center" ref={dropdownRef}>
         <div className="model-selector-dropdown">
           <button className="current-model-display" onClick={() => setDropdownOpen(!isDropdownOpen)}>
-            {activeModel ? activeModel.name : t('header.selectModel')}
+            {activeModel ? (getModelLabel(activeModel) || t('header.selectModel')) : t('header.selectModel')}
             <span className="dropdown-arrow">{isDropdownOpen ? '▲' : '▼'}</span>
           </button>
           {isDropdownOpen && (
@@ -105,7 +142,7 @@ const Header = () => {
                   className="model-dropdown-item"
                   onClick={() => handleSelectModel(model.id)}
                 >
-                  {model.name}
+                  {getModelLabel(model) || model.id}
                 </div>
               ))}
             </div>
