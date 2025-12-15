@@ -103,22 +103,12 @@ const ChatPage = () => {
   useEffect(() => {
     const checkServerStatus = async () => {
       try {
-        // /health 엔드포인트가 없을 수 있으므로 /completion 엔드포인트로 체크
-        const response = await fetch(`${LLAMA_BASE_URL}/completion`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ prompt: '', n_predict: 0 }),
-          signal: AbortSignal.timeout(1000), // 1초 타임아웃
+        // 라우터 모드 포함: /health 로 서버 기동 여부만 체크
+        const response = await fetch(`${LLAMA_BASE_URL}/health`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(1000),
         });
-        
-        if (response.status === 503) {
-          setIsModelLoading(true);
-        } else {
-          // 503이 아니면 모델이 로드된 것으로 간주
-          setIsModelLoading(false);
-        }
+        setIsModelLoading(false);
       } catch (error) {
         // 서버가 아직 시작되지 않았거나 연결 불가
         // 타임아웃이나 네트워크 에러는 조용히 처리 (로그 출력 안 함)

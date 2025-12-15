@@ -47,6 +47,7 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
     const prompt = buildLlama3Prompt(messages, language);
     const config = JSON.parse(localStorage.getItem('modelConfig')) || {};
     const contextSize = config.contextSize || 2048;
+    const model = (config.modelPath || '').trim();
     
     // 서버의 tokenize API를 사용하여 정확한 토큰 수 계산
     const promptTokens = await countTokens(prompt);
@@ -112,6 +113,7 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
     
     // llama.cpp server uses snake_case for parameters
     const payload = {
+      model,
       prompt,
       stream: true,
       n_predict: dynamicNPredict,
@@ -303,12 +305,15 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
 // 정확한 토큰 수 계산을 위한 함수
 export const countTokens = async (prompt) => {
   try {
+    const config = JSON.parse(localStorage.getItem('modelConfig')) || {};
+    const model = (config.modelPath || '').trim();
     const response = await fetch(`${LLAMA_BASE_URL}/tokenize`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
+        model,
         content: prompt,
         add_special: false,
         parse_special: true
@@ -341,12 +346,15 @@ export const countTokens = async (prompt) => {
 // 토큰 디버깅용 함수: 토큰 ID 및 piece 반환
 export const tokenizeText = async (content) => {
   try {
+    const config = JSON.parse(localStorage.getItem('modelConfig')) || {};
+    const model = (config.modelPath || '').trim();
     const response = await fetch(`${LLAMA_BASE_URL}/tokenize`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
+        model,
         content,
         add_special: true,
         parse_special: true,

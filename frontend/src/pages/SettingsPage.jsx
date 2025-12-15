@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import ModelForm from '../components/ModelForm';
 import { useLanguage } from '../contexts/LanguageContext';
 import './SettingsPage.css';
+import { LLAMA_BASE_URL } from '../services/api';
 
 const DescriptionCard = ({ title, content }) => (
   <div className="description-card">
@@ -207,6 +208,35 @@ const SettingsPage = () => {
         detail: { contextSize }
       }));
       window.dispatchEvent(new CustomEvent('config-updated'));
+    }
+
+    // 서버 재기동(라우터 모드): active model을 unload/load 해서 설정(-c, -ngl)을 반영
+    if (!window.electronAPI && activeModel && activeModel.modelPath) {
+      const model = String(activeModel.modelPath).trim();
+      if (model) {
+        const extraArgs = [];
+        if (activeModel.contextSize) extraArgs.push('-c', String(activeModel.contextSize));
+        if (activeModel.gpuLayers !== undefined && activeModel.gpuLayers !== null) extraArgs.push('-ngl', String(activeModel.gpuLayers));
+
+        try {
+          // unload는 실패해도 무시(이미 안 떠있을 수 있음)
+          await fetch(`${LLAMA_BASE_URL}/models/unload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model }),
+            signal: AbortSignal.timeout(2000),
+          }).catch(() => {});
+
+          await fetch(`${LLAMA_BASE_URL}/models/load`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, extra_args: extraArgs }),
+            signal: AbortSignal.timeout(5000),
+          }).catch(() => {});
+        } catch (_e) {
+          // 조용히 무시
+        }
+      }
     }
 
     alert('Settings saved successfully.');

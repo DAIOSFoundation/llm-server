@@ -118,7 +118,11 @@ const PerformancePanel = () => {
         // Electron이 없으면 llama-server /metrics 기준으로 최소한의 성능 지표만 표시
         // (CPU/시스템 메모리는 서버 에이전트 없이 브라우저에서 가져올 수 없으므로 0으로 유지)
         try {
-          const res = await fetch(`${LLAMA_BASE_URL}/metrics`, { signal: AbortSignal.timeout(1500) });
+          const config = JSON.parse(localStorage.getItem('modelConfig')) || {};
+          const model = encodeURIComponent((config.modelPath || '').trim());
+          if (!model) return;
+
+          const res = await fetch(`${LLAMA_BASE_URL}/metrics?model=${model}`, { signal: AbortSignal.timeout(1500) });
           if (res.ok) {
             const text = await res.text();
             const vramTotalMatch = text.match(/llamacpp:vram_total_bytes\s+([\d.e+\-]+)/);
