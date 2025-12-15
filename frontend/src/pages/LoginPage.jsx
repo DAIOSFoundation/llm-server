@@ -70,10 +70,7 @@ const LoginPage = () => {
 
   const onLogin = async (e) => {
     e.preventDefault();
-    if (!isStrongPassword(password)) {
-      window.alert(t('login.passwordPolicy'));
-      return;
-    }
+    if (!password) return;
     setBusy(true);
     try {
       await auth.login({ superAdminId, password });
