@@ -14,6 +14,275 @@ let cachedVramUsed = 0; // VRAM 사용량 (바이트) - 0으로 초기화
 let currentModelConfig = null; // 현재 로드된 모델 설정
 let lastVramUpdateTime = 0; // 마지막 VRAM 업데이트 시간 (디버깅용)
 
+// ----------------------------
+// GGUF metadata parser (no full-file read)
+// ----------------------------
+const GGUF_VALUE_TYPE = {
+  UINT8: 0,
+  INT8: 1,
+  UINT16: 2,
+  INT16: 3,
+  UINT32: 4,
+  INT32: 5,
+  FLOAT32: 6,
+  BOOL: 7,
+  STRING: 8,
+  ARRAY: 9,
+  UINT64: 10,
+  INT64: 11,
+  FLOAT64: 12,
+};
+
+const GGML_TYPE_NAME = {
+  0: 'F32',
+  1: 'F16',
+  2: 'Q4_0',
+  3: 'Q4_1',
+  6: 'Q5_0',
+  7: 'Q5_1',
+  8: 'Q8_0',
+  9: 'Q8_1',
+  10: 'Q2_K',
+  11: 'Q3_K',
+  12: 'Q4_K',
+  13: 'Q5_K',
+  14: 'Q6_K',
+  15: 'Q8_K',
+  16: 'IQ2_XXS',
+  17: 'IQ2_XS',
+  18: 'IQ3_XXS',
+  19: 'IQ1_S',
+  20: 'IQ4_NL',
+  21: 'IQ3_S',
+  22: 'IQ2_S',
+  23: 'IQ4_XS',
+  24: 'I8',
+  25: 'I16',
+  26: 'I32',
+  27: 'I64',
+  28: 'F64',
+  29: 'IQ1_M',
+  30: 'BF16',
+  34: 'TQ1_0',
+  35: 'TQ2_0',
+  39: 'MXFP4',
+};
+
+// subset of llama_ftype values (llama.cpp/include/llama.h)
+const LLAMA_FTYPE_NAME = {
+  0: 'ALL_F32',
+  1: 'MOSTLY_F16',
+  2: 'MOSTLY_Q4_0',
+  3: 'MOSTLY_Q4_1',
+  7: 'MOSTLY_Q8_0',
+  8: 'MOSTLY_Q5_0',
+  9: 'MOSTLY_Q5_1',
+  10: 'MOSTLY_Q2_K',
+  11: 'MOSTLY_Q3_K_S',
+  12: 'MOSTLY_Q3_K_M',
+  13: 'MOSTLY_Q3_K_L',
+  14: 'MOSTLY_Q4_K_S',
+  15: 'MOSTLY_Q4_K_M',
+  16: 'MOSTLY_Q5_K_S',
+  17: 'MOSTLY_Q5_K_M',
+  18: 'MOSTLY_Q6_K',
+  19: 'MOSTLY_IQ2_XXS',
+  20: 'MOSTLY_IQ2_XS',
+  21: 'MOSTLY_Q2_K_S',
+  22: 'MOSTLY_IQ3_XS',
+  23: 'MOSTLY_IQ3_XXS',
+  24: 'MOSTLY_IQ1_S',
+  25: 'MOSTLY_IQ4_NL',
+  26: 'MOSTLY_IQ3_S',
+  27: 'MOSTLY_IQ3_M',
+  28: 'MOSTLY_IQ2_S',
+  29: 'MOSTLY_IQ2_M',
+  30: 'MOSTLY_IQ4_XS',
+  31: 'MOSTLY_IQ1_M',
+  32: 'MOSTLY_BF16',
+  36: 'MOSTLY_TQ1_0',
+  37: 'MOSTLY_TQ2_0',
+  38: 'MOSTLY_MXFP4_MOE',
+};
+
+function parseGgufInfoFromFile(filePath) {
+  const fd = fs.openSync(filePath, 'r');
+  let pos = 0;
+
+  const MAX_STRING_BYTES = 4 * 1024 * 1024; // 4MB safeguard
+
+  const readBytes = (n) => {
+    const buf = Buffer.allocUnsafe(n);
+    const read = fs.readSync(fd, buf, 0, n, pos);
+    if (read !== n) {
+      throw new Error(`Unexpected EOF while reading ${n} bytes`);
+    }
+    pos += n;
+    return buf;
+  };
+
+  const readU32 = () => readBytes(4).readUInt32LE(0);
+  const readI32 = () => readBytes(4).readInt32LE(0);
+  const readI64 = () => {
+    const v = readBytes(8).readBigInt64LE(0);
+    const n = Number(v);
+    if (!Number.isSafeInteger(n)) {
+      throw new Error('int64 value is not safe integer');
+    }
+    return n;
+  };
+  const readU64 = () => {
+    const v = readBytes(8).readBigUInt64LE(0);
+    const n = Number(v);
+    if (!Number.isSafeInteger(n)) {
+      throw new Error('uint64 value is not safe integer');
+    }
+    return n;
+  };
+  const readString = () => {
+    const len = readU64();
+    if (len < 0 || len > MAX_STRING_BYTES) {
+      throw new Error(`String length out of range: ${len}`);
+    }
+    return readBytes(len).toString('utf8');
+  };
+
+  const skipBytes = (n) => {
+    pos += n;
+  };
+
+  const sizeOfGgufType = (t) => {
+    switch (t) {
+      case GGUF_VALUE_TYPE.UINT8:
+      case GGUF_VALUE_TYPE.INT8:
+      case GGUF_VALUE_TYPE.BOOL:
+        return 1;
+      case GGUF_VALUE_TYPE.UINT16:
+      case GGUF_VALUE_TYPE.INT16:
+        return 2;
+      case GGUF_VALUE_TYPE.UINT32:
+      case GGUF_VALUE_TYPE.INT32:
+      case GGUF_VALUE_TYPE.FLOAT32:
+        return 4;
+      case GGUF_VALUE_TYPE.UINT64:
+      case GGUF_VALUE_TYPE.INT64:
+      case GGUF_VALUE_TYPE.FLOAT64:
+        return 8;
+      default:
+        return null;
+    }
+  };
+
+  const skipValueByType = (t) => {
+    if (t === GGUF_VALUE_TYPE.STRING) {
+      // string = u64 len + bytes
+      const len = readU64();
+      if (len < 0 || len > MAX_STRING_BYTES) {
+        throw new Error(`String length out of range: ${len}`);
+      }
+      skipBytes(len);
+      return;
+    }
+
+    if (t === GGUF_VALUE_TYPE.ARRAY) {
+      const elemType = readI32();
+      const n = readU64();
+      if (elemType === GGUF_VALUE_TYPE.STRING) {
+        for (let i = 0; i < n; i++) {
+          const len = readU64();
+          if (len < 0 || len > MAX_STRING_BYTES) {
+            throw new Error(`String length out of range: ${len}`);
+          }
+          skipBytes(len);
+        }
+        return;
+      }
+      const elemSize = sizeOfGgufType(elemType);
+      if (elemSize == null) {
+        throw new Error(`Unsupported array element type: ${elemType}`);
+      }
+      skipBytes(n * elemSize);
+      return;
+    }
+
+    const sz = sizeOfGgufType(t);
+    if (sz == null) {
+      throw new Error(`Unsupported GGUF value type: ${t}`);
+    }
+    skipBytes(sz);
+  };
+
+  try {
+    const magic = readBytes(4).toString('ascii');
+    if (magic !== 'GGUF') {
+      throw new Error(`Not a GGUF file (magic=${magic})`);
+    }
+
+    const version = readU32();
+    // GGUF spec: n_tensors, n_kv are uint64
+    const nTensors = readU64();
+    const nKv = readU64();
+
+    let fileTypeId = null;
+    const kvKeysRead = [];
+
+    for (let i = 0; i < nKv; i++) {
+      const key = readString();
+      const valueType = readI32();
+
+      if (kvKeysRead.length < 64) {
+        kvKeysRead.push(key);
+      }
+
+      if (key === 'general.file_type' && (valueType === GGUF_VALUE_TYPE.UINT32 || valueType === GGUF_VALUE_TYPE.INT32)) {
+        fileTypeId = valueType === GGUF_VALUE_TYPE.UINT32 ? readU32() : readI32();
+      } else {
+        skipValueByType(valueType);
+      }
+    }
+
+    const typeCounts = {};
+    const qkv = { q: null, k: null, v: null };
+
+    const matchQ = (name) => /(attn_q|q_proj|wq|query)/i.test(name);
+    const matchK = (name) => /(attn_k|k_proj|wk|key)/i.test(name);
+    const matchV = (name) => /(attn_v|v_proj|wv|value)/i.test(name);
+
+    for (let i = 0; i < nTensors; i++) {
+      const tName = readString();
+      const nDims = readU32();
+      for (let d = 0; d < nDims; d++) {
+        readU64(); // dim (uint64)
+      }
+      const tType = readI32(); // ggml_type
+      readU64(); // offset
+
+      const typeName = GGML_TYPE_NAME[tType] || `TYPE_${tType}`;
+      typeCounts[typeName] = (typeCounts[typeName] || 0) + 1;
+
+      // record first-seen Q/K/V weight tensor type
+      if (!qkv.q && matchQ(tName)) qkv.q = typeName;
+      if (!qkv.k && matchK(tName)) qkv.k = typeName;
+      if (!qkv.v && matchV(tName)) qkv.v = typeName;
+    }
+
+    const fileTypeName = fileTypeId != null ? (LLAMA_FTYPE_NAME[fileTypeId & ~1024] || `FTYPE_${fileTypeId}`) : null;
+
+    return {
+      ok: true,
+      filePath,
+      ggufVersion: version,
+      fileTypeId,
+      fileTypeName,
+      tensorTypes: typeCounts,
+      qkv,
+      kvKeysSample: kvKeysRead,
+    };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 // macOS VRAM 정보 가져오기
 function initVRAMInfo() {
   if (process.platform === 'darwin') {
@@ -204,6 +473,20 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('Failed to save config:', error);
       return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('get-gguf-info', async (_event, modelPath) => {
+    try {
+      if (!modelPath || typeof modelPath !== 'string') {
+        return { ok: false, error: 'Invalid modelPath' };
+      }
+      if (!fs.existsSync(modelPath)) {
+        return { ok: false, error: 'File not found' };
+      }
+      return parseGgufInfoFromFile(modelPath);
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) };
     }
   });
 

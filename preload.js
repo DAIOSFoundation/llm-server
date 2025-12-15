@@ -14,4 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Get system metrics
   getSystemMetrics: () => ipcRenderer.invoke('get-system-metrics'),
+
+  // Read GGUF metadata (quantization, tensor types, etc.)
+  getGgufInfo: (modelPath) => ipcRenderer.invoke('get-gguf-info', modelPath),
 });

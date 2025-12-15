@@ -2,9 +2,9 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useLanguage } from '../contexts/LanguageContext';
 import './ModelForm.css';
 
-// GGUF 모델 경로(파일명)를 기반으로 양자화 정보를 추정하는 헬퍼
-// NOTE: 1차 버전은 파일명 패턴(FP16, Q8_0, Q4_K_M 등)에 기반한 추정입니다.
-// 나중에 필요하다면 gguf 헤더를 직접 파싱하는 방식으로 확장할 수 있습니다.
+// (Fallback) GGUF 모델 경로(파일명)를 기반으로 양자화 정보를 추정하는 헬퍼
+// NOTE: 기본은 GGUF 내부 메타데이터(헤더/KV/텐서 타입)를 직접 읽어 표시합니다.
+// 다만 파일 읽기 실패/권한 문제 등으로 메타데이터를 읽지 못할 때만 파일명 기반 추정을 사용합니다.
 const inferQuantizationFromPath = (modelPath) => {
   if (!modelPath) {
     return { type: '-', detail: '-' };
@@ -48,7 +48,7 @@ const inferQuantizationFromPath = (modelPath) => {
   return { type: 'Unknown', detail: fileName };
 };
 
-const buildQuantizationGuide = (language, quantDetail, quantType) => {
+const buildQuantizationGuide = (language, quantDetail, quantType, ggufInfo) => {
   const detail = (quantDetail || '').toUpperCase();
 
   const isKo = language === 'ko';
@@ -58,14 +58,28 @@ const buildQuantizationGuide = (language, quantDetail, quantType) => {
     paragraphs: [],
   };
 
+  // GGUF 메타데이터를 읽지 못한 경우(에러) 안내
+  if (ggufInfo && ggufInfo.ok === false) {
+    base.paragraphs.push(
+      isKo
+        ? `GGUF 메타데이터를 읽지 못했습니다: ${ggufInfo.error || 'Unknown error'}`
+        : `Failed to read GGUF metadata: ${ggufInfo.error || 'Unknown error'}`,
+    );
+    base.paragraphs.push(
+      isKo
+        ? '현재 표시는 파일명 기반 추정(Fallback)입니다.'
+        : 'Current display is filename-based inference (fallback).',
+    );
+  }
+
   if (!detail || detail === '-' || quantType === '-') {
     base.paragraphs = [
       isKo
-        ? '모델을 선택하면 파일명 패턴을 기반으로 양자화 정보를 추정하여 표시합니다.'
-        : 'When you select a model, we infer quantization from the filename pattern.',
+        ? '모델을 선택하면 GGUF 내부 메타데이터(헤더/KV/텐서 타입)를 읽어 양자화 정보를 표시합니다.'
+        : 'When you select a model, we read GGUF metadata (header/KV/tensor types) to display quantization.',
       isKo
-        ? '정확한 텐서별(예: Q/K/V) 양자화는 gguf 헤더/텐서 메타데이터 파싱이 필요합니다.'
-        : 'Exact per-tensor (e.g., Q/K/V) quantization requires parsing GGUF metadata.',
+        ? '파일 접근이 불가한 경우에만 파일명 기반 추정으로 대체합니다.'
+        : 'If the file cannot be read, we fall back to filename-based inference.',
     ];
     return base;
   }
@@ -73,9 +87,55 @@ const buildQuantizationGuide = (language, quantDetail, quantType) => {
   // 공통 설명
   base.paragraphs.push(
     isKo
-      ? '표시는 GGUF 파일명에 포함된 태그(Q4_K_M, Q8_0, FP16 등)를 기반으로 합니다.'
-      : 'This is inferred from filename tags (Q4_K_M, Q8_0, FP16, etc.).',
+      ? '표시는 GGUF 내부 메타데이터의 general.file_type(있다면) 및 텐서 타입 통계를 기반으로 합니다.'
+      : 'Displayed values are based on GGUF metadata (general.file_type when present) and tensor type stats.',
   );
+
+  // 메타데이터 기반의 "구체적인 내용" 출력
+  if (ggufInfo && ggufInfo.ok) {
+    if (ggufInfo.ggufVersion != null) {
+      base.paragraphs.push(
+        isKo
+          ? `GGUF 버전: v${ggufInfo.ggufVersion}`
+          : `GGUF version: v${ggufInfo.ggufVersion}`,
+      );
+    }
+
+    if (ggufInfo.fileTypeName) {
+      base.paragraphs.push(
+        isKo
+          ? `general.file_type: ${ggufInfo.fileTypeName}`
+          : `general.file_type: ${ggufInfo.fileTypeName}`,
+      );
+    }
+
+    // 텐서 타입 통계(상위 5개) 표시
+    if (ggufInfo.tensorTypes && typeof ggufInfo.tensorTypes === 'object') {
+      const entries = Object.entries(ggufInfo.tensorTypes)
+        .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+        .slice(0, 5)
+        .map(([k, v]) => `${k}: ${v}`);
+
+      if (entries.length > 0) {
+        base.paragraphs.push(
+          isKo
+            ? `텐서 타입 분포(상위 5): ${entries.join(', ')}`
+            : `Tensor type stats (top 5): ${entries.join(', ')}`,
+        );
+      }
+    }
+  }
+
+  if (ggufInfo && ggufInfo.qkv && (ggufInfo.qkv.q || ggufInfo.qkv.k || ggufInfo.qkv.v)) {
+    const q = ggufInfo.qkv.q || '-';
+    const k = ggufInfo.qkv.k || '-';
+    const v = ggufInfo.qkv.v || '-';
+    base.paragraphs.push(
+      isKo
+        ? `어텐션 Q/K/V 텐서 타입: Q=${q}, K=${k}, V=${v} (모델에 따라 텐서별로 혼합될 수 있습니다).`
+        : `Attention Q/K/V tensor types: Q=${q}, K=${k}, V=${v} (models may mix per-tensor types).`,
+    );
+  }
 
   // FP16
   if (detail.includes('FP16') || detail.includes('F16')) {
@@ -141,6 +201,7 @@ const buildQuantizationGuide = (language, quantDetail, quantType) => {
 const ModelForm = ({ config, onChange }) => {
   const { t, language } = useLanguage();
   const [formData, setFormData] = useState({});
+  const [ggufInfo, setGgufInfo] = useState(null);
 
   useEffect(() => {
     const defaults = {
@@ -154,6 +215,33 @@ const ModelForm = ({ config, onChange }) => {
     };
     setFormData({ ...defaults, ...config });
   }, [config]);
+
+  // GGUF 메타데이터 읽기 (modelPath 변경 시)
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      const modelPath = formData.modelPath;
+      if (!modelPath || !window.electronAPI || !window.electronAPI.getGgufInfo) {
+        setGgufInfo(null);
+        return;
+      }
+
+      try {
+        const info = await window.electronAPI.getGgufInfo(modelPath);
+        if (!cancelled) {
+          setGgufInfo(info && info.ok ? info : info);
+        }
+      } catch (_e) {
+        if (!cancelled) {
+          setGgufInfo({ ok: false, error: 'Failed to read GGUF metadata' });
+        }
+      }
+    };
+
+    run();
+    return () => { cancelled = true; };
+  }, [formData.modelPath]);
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -182,15 +270,45 @@ const ModelForm = ({ config, onChange }) => {
     onChange(newFormData);
   }
 
-  // 양자화 정보 추정 (modelPath 변경 시 자동 갱신)
-  const quantInfo = useMemo(
-    () => inferQuantizationFromPath(formData.modelPath),
-    [formData.modelPath],
-  );
+  // 양자화 정보: 1) GGUF 메타데이터 기반 (우선) 2) 파일명 추정 (fallback)
+  const quantInfo = useMemo(() => {
+    if (ggufInfo && ggufInfo.ok) {
+      // prefer general.file_type if present
+      if (ggufInfo.fileTypeName) {
+        const name = String(ggufInfo.fileTypeName);
+        const upper = name.toUpperCase();
+        if (upper.includes('F16')) return { type: 'FP16', detail: 'FP16' };
+        if (upper.includes('BF16')) return { type: 'BF16', detail: 'BF16' };
+        const qMatch = upper.match(/Q([0-9])_([A-Z0-9_]+)/);
+        if (qMatch) return { type: `${qMatch[1]}-bit`, detail: `Q${qMatch[1]}_${qMatch[2]}` };
+        // Fallback: show raw ftype name
+        return { type: 'Mixed', detail: name.replace(/^MOSTLY_/, '') };
+      }
+
+      // fallback to tensor-type stats if file_type missing
+      const types = ggufInfo.tensorTypes || {};
+      const entries = Object.entries(types);
+      if (entries.length > 0) {
+        // pick most common non-F32 for a more meaningful label
+        const sorted = entries
+          .filter(([k]) => k !== 'F32')
+          .sort((a, b) => (b[1] || 0) - (a[1] || 0));
+        const top = sorted[0] || entries[0];
+        const topType = top ? top[0] : '-';
+        const m = String(topType).match(/^Q([0-9])_/);
+        if (m) return { type: `${m[1]}-bit`, detail: topType };
+        if (topType === 'F16') return { type: 'FP16', detail: 'FP16' };
+        if (topType === 'BF16') return { type: 'BF16', detail: 'BF16' };
+        return { type: 'Mixed', detail: topType };
+      }
+    }
+
+    return inferQuantizationFromPath(formData.modelPath);
+  }, [formData.modelPath, ggufInfo]);
 
   const quantGuide = useMemo(
-    () => buildQuantizationGuide(language, quantInfo.detail, quantInfo.type),
-    [language, quantInfo.detail, quantInfo.type],
+    () => buildQuantizationGuide(language, quantInfo.detail, quantInfo.type, ggufInfo && ggufInfo.ok ? ggufInfo : null),
+    [language, quantInfo.detail, quantInfo.type, ggufInfo],
   );
 
   return (
