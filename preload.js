@@ -2,7 +2,6 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // Functions that can be invoked from the renderer
-  selectFile: () => ipcRenderer.invoke('dialog:openFile'),
   loadConfig: () => ipcRenderer.invoke('load-config'),
   saveConfig: (configData) => ipcRenderer.invoke('save-config', configData),
   

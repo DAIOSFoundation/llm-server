@@ -141,17 +141,6 @@ const ModelForm = ({ config, onChange }) => {
     setFormData(newFormData);
     onChange(newFormData);
   };
-
-  const handleFindModel = async () => {
-    if (window.electronAPI) {
-      const filePath = await window.electronAPI.selectFile();
-      if (filePath) {
-        const newFormData = { ...formData, modelPath: filePath };
-        setFormData(newFormData);
-        onChange(newFormData);
-      }
-    }
-  };
   
   // 양자화 정보: 1) GGUF 메타데이터 기반 (우선) 2) 파일명 추정 (fallback)
   const quantInfo = useMemo(() => {
@@ -219,7 +208,7 @@ const ModelForm = ({ config, onChange }) => {
       {/* Model Path */}
       <div className="form-section">
         <h3>{t('settings.modelPath')}</h3>
-        <div className="form-group model-path-group">
+        <div className="form-group">
           <input
             type="text"
             name="modelPath"
@@ -228,13 +217,6 @@ const ModelForm = ({ config, onChange }) => {
             placeholder={t('settings.modelPathPlaceholder')}
             autoComplete="off"
           />
-          <button
-            type="button"
-            onClick={handleFindModel}
-            className="find-button"
-          >
-            {t('settings.findModel')}
-          </button>
         </div>
       </div>
 

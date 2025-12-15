@@ -431,14 +431,6 @@ app.whenReady().then(() => {
   initVRAMInfo();
   initializeConfig();
 
-  ipcMain.handle('dialog:openFile', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog({
-      properties: ['openFile'],
-      filters: [{ name: 'Models', extensions: ['gguf'] }],
-    });
-    return canceled ? null : filePaths[0];
-  });
-
   ipcMain.handle('load-config', async () => {
     try {
       const data = fs.readFileSync(configPath, 'utf-8');
