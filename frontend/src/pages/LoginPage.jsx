@@ -1,13 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import './LoginPage.css';
-
-const randomId = () => {
-  const part = Math.random().toString(16).slice(2, 10);
-  return `superadmin_${part}`;
-};
 
 const is8Digits = (s) => /^\d{8}$/.test(String(s || ''));
 
@@ -16,7 +11,6 @@ const LoginPage = () => {
   const nav = useNavigate();
   const auth = useAuth();
 
-  const initialSuperId = useMemo(() => randomId(), []);
   const [mode, setMode] = useState('loading'); // loading | setup | login | verify
   const [superAdminId, setSuperAdminId] = useState('');
   const [password, setPassword] = useState('');
@@ -37,7 +31,7 @@ const LoginPage = () => {
       setSuperAdminId(auth.superAdminId || '');
       setMode('login');
     } else {
-      setSuperAdminId(initialSuperId);
+      setSuperAdminId('');
       setMode('setup');
     }
   }, [auth?.loading, auth?.authenticated, auth?.initialized, auth?.superAdminId]);
@@ -96,7 +90,12 @@ const LoginPage = () => {
           <form className="login-form" onSubmit={onSetup}>
             <div className="login-row">
               <label>{t('login.superAdminId')}</label>
-              <input value={superAdminId} readOnly />
+              <input
+                value={superAdminId}
+                onChange={(e) => setSuperAdminId(e.target.value)}
+                placeholder={t('login.superAdminIdPlaceholder')}
+                autoFocus
+              />
             </div>
             <div className="login-row">
               <label>{t('login.password')}</label>
@@ -130,7 +129,11 @@ const LoginPage = () => {
             <div className="login-note">{t('login.verifyNote')}</div>
             <div className="login-row">
               <label>{t('login.superAdminId')}</label>
-              <input value={superAdminId} readOnly />
+              <input
+                value={superAdminId}
+                onChange={(e) => setSuperAdminId(e.target.value)}
+                placeholder={t('login.superAdminIdPlaceholder')}
+              />
             </div>
             <div className="login-row">
               <label>{t('login.password')}</label>
@@ -153,7 +156,11 @@ const LoginPage = () => {
           <form className="login-form" onSubmit={onLogin}>
             <div className="login-row">
               <label>{t('login.superAdminId')}</label>
-              <input value={superAdminId} readOnly />
+              <input
+                value={superAdminId}
+                onChange={(e) => setSuperAdminId(e.target.value)}
+                placeholder={t('login.superAdminIdPlaceholder')}
+              />
             </div>
             <div className="login-row">
               <label>{t('login.password')}</label>
