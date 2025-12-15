@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useLanguage } from '../contexts/LanguageContext';
 import './ModelForm.css';
+import { LLAMA_BASE_URL } from '../services/api';
 
 // (Fallback) GGUF 모델 경로(파일명)를 기반으로 양자화 정보를 추정하는 헬퍼
 // NOTE: 기본은 GGUF 내부 메타데이터(헤더/KV/텐서 타입)를 직접 읽어 표시합니다.
@@ -130,16 +131,18 @@ const ModelForm = ({ config, onChange }) => {
       return;
     }
 
-    if (!window.electronAPI || !window.electronAPI.getGgufInfo) {
-      setPathCheck({ status: 'error', message: t('settings.verifyPathUnavailable') });
-      setGgufInfo(null);
-      return;
-    }
-
     setPathCheck({ status: 'checking', message: '' });
     try {
-      const info = await window.electronAPI.getGgufInfo(modelPath);
-      if (info && info.ok) {
+      const res = await fetch(`${LLAMA_BASE_URL}/gguf-info`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: modelPath }),
+        signal: AbortSignal.timeout(3000),
+      });
+
+      const info = await res.json().catch(() => null);
+
+      if (res.ok && info && info.ok) {
         setGgufInfo(info);
         setPathCheck({ status: 'ok', message: t('settings.verifyPathOk') });
       } else {

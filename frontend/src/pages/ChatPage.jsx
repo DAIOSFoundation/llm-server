@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import { sendChatMessage, buildLlama3Prompt, countTokens } from '../services/api';
+import { sendChatMessage, buildLlama3Prompt, countTokens, LLAMA_BASE_URL } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import LogPanel from '../components/LogPanel';
 import ProgressBar from '../components/ProgressBar';
@@ -104,7 +104,7 @@ const ChatPage = () => {
     const checkServerStatus = async () => {
       try {
         // /health 엔드포인트가 없을 수 있으므로 /completion 엔드포인트로 체크
-        const response = await fetch('http://localhost:8080/completion', {
+        const response = await fetch(`${LLAMA_BASE_URL}/completion`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

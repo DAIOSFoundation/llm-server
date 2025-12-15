@@ -9,6 +9,7 @@ const Header = () => {
   const [config, setConfig] = useState({ models: [], activeModelId: null });
   const [isDropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
+  const STORAGE_KEY = 'llmServerClientConfig';
 
   useEffect(() => {
     const loadConfig = async () => {
@@ -17,6 +18,18 @@ const Header = () => {
         // Ensure loadedConfig and its models property are not null/undefined
         if (loadedConfig && loadedConfig.models) {
           setConfig(loadedConfig);
+        }
+      } else {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.models) {
+              setConfig(parsed);
+            }
+          }
+        } catch (_e) {
+          // ignore
         }
       }
     };
@@ -37,6 +50,26 @@ const Header = () => {
     setDropdownOpen(false);
     if (window.electronAPI) {
       await window.electronAPI.saveConfig(newConfig); // This will also restart the server
+    } else {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(newConfig));
+      } catch (_e) {
+        // ignore
+      }
+    }
+
+    // 클라이언트 추론 파라미터용 active model도 갱신
+    const models = newConfig?.models || [];
+    const activeModel = models.find(m => m.id === newConfig?.activeModelId);
+    if (activeModel) {
+      try {
+        localStorage.setItem('modelConfig', JSON.stringify(activeModel));
+        const contextSize = activeModel.contextSize || 2048;
+        window.dispatchEvent(new CustomEvent('config-updated', { detail: { contextSize } }));
+        window.dispatchEvent(new CustomEvent('config-updated'));
+      } catch (_e) {
+        // ignore
+      }
     }
   };
 

@@ -18,6 +18,30 @@ const SettingsPage = () => {
   const [selectedModelId, setSelectedModelId] = useState(null);
   const [isDescriptionsExpanded, setIsDescriptionsExpanded] = useState(false);
 
+  const STORAGE_KEY = 'llmServerClientConfig';
+
+  const loadClientConfig = () => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return { models: [], activeModelId: null };
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.models)) {
+        return parsed;
+      }
+    } catch (_e) {
+      // ignore
+    }
+    return { models: [], activeModelId: null };
+  };
+
+  const saveClientConfig = (cfg) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+    } catch (_e) {
+      // ignore
+    }
+  };
+
   useEffect(() => {
     const loadConfig = async () => {
       if (window.electronAPI) {
@@ -89,6 +113,14 @@ const SettingsPage = () => {
               setSelectedModelId(loadedConfig.models[0].id);
             }
           }
+      } else {
+        const loadedConfig = loadClientConfig();
+        setConfig(loadedConfig);
+        if (loadedConfig.activeModelId) {
+          setSelectedModelId(loadedConfig.activeModelId);
+        } else if (loadedConfig.models.length > 0) {
+          setSelectedModelId(loadedConfig.models[0].id);
+        }
       }
     };
     loadConfig();
@@ -150,36 +182,35 @@ const SettingsPage = () => {
   };
 
   const handleSave = async () => {
-    if (window.electronAPI) {
-      let configToSave = { ...(config || { models: [], activeModelId: null }) };
-      if (!configToSave.activeModelId && configToSave.models && configToSave.models.length > 0) {
-        configToSave.activeModelId = configToSave.models[0].id;
-      }
-      
-      const result = await window.electronAPI.saveConfig(configToSave);
-      if (result.success) {
-        // 설정 저장 후 localStorage에 저장 (PerformancePanel이 읽을 수 있도록)
-        const activeModel = configToSave.models.find(m => m.id === configToSave.activeModelId);
-        if (activeModel) {
-          localStorage.setItem('modelConfig', JSON.stringify(activeModel));
-          
-          // Context size 변경 이벤트 발생
-          const contextSize = activeModel.contextSize || 2048;
-          window.dispatchEvent(new CustomEvent('config-updated', {
-            detail: { contextSize }
-          }));
-          
-          // 설정 업데이트 이벤트 발생 (ChatPage에서 showSpecialTokens 읽기 위해)
-          window.dispatchEvent(new CustomEvent('config-updated'));
-        }
-        
-        alert('Settings saved successfully.');
-        // 저장 성공 후 챗팅 창으로 이동
-        navigate('/');
-      } else {
-        alert(`Failed to save settings: ${result.error}`);
-      }
+    let configToSave = { ...(config || { models: [], activeModelId: null }) };
+    if (!configToSave.activeModelId && configToSave.models && configToSave.models.length > 0) {
+      configToSave.activeModelId = configToSave.models[0].id;
     }
+
+    if (window.electronAPI) {
+      const result = await window.electronAPI.saveConfig(configToSave);
+      if (!result.success) {
+        alert(`Failed to save settings: ${result.error}`);
+        return;
+      }
+    } else {
+      saveClientConfig(configToSave);
+    }
+
+    // 설정 저장 후 localStorage에 저장 (Chat/Performance가 읽을 수 있도록)
+    const activeModel = configToSave.models.find(m => m.id === configToSave.activeModelId);
+    if (activeModel) {
+      localStorage.setItem('modelConfig', JSON.stringify(activeModel));
+
+      const contextSize = activeModel.contextSize || 2048;
+      window.dispatchEvent(new CustomEvent('config-updated', {
+        detail: { contextSize }
+      }));
+      window.dispatchEvent(new CustomEvent('config-updated'));
+    }
+
+    alert('Settings saved successfully.');
+    navigate('/');
   };
 
   const handleClose = () => navigate('/');

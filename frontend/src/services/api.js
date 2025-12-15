@@ -1,10 +1,4 @@
-import axios from 'axios';
-
-const API_BASE_URL = 'http://localhost:3001';
-
-const api = axios.create({
-  baseURL: API_BASE_URL,
-});
+export const LLAMA_BASE_URL = import.meta.env.VITE_LLAMACPP_BASE_URL || 'http://localhost:8080';
 
 // Server Log 패널에 메시지를 보내기 위한 헬퍼
 const pushServerLog = (message, data) => {
@@ -145,7 +139,7 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
 
     // console.log('[API] Request Payload:', JSON.stringify(payload, null, 2)); // 디버그용 Payload 로그 추가
 
-    const response = await fetch('http://localhost:8080/completion', {
+    const response = await fetch(`${LLAMA_BASE_URL}/completion`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -309,7 +303,7 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
 // 정확한 토큰 수 계산을 위한 함수
 export const countTokens = async (prompt) => {
   try {
-    const response = await fetch('http://localhost:8080/tokenize', {
+    const response = await fetch(`${LLAMA_BASE_URL}/tokenize`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -347,7 +341,7 @@ export const countTokens = async (prompt) => {
 // 토큰 디버깅용 함수: 토큰 ID 및 piece 반환
 export const tokenizeText = async (content) => {
   try {
-    const response = await fetch('http://localhost:8080/tokenize', {
+    const response = await fetch(`${LLAMA_BASE_URL}/tokenize`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -378,7 +372,5 @@ export const tokenizeText = async (content) => {
   }
 };
 
-export const getSystemInfo = async () => {
-  const response = await api.get('/system');
-  return response.data;
-};
+// llama-server는 /system 같은 별도 시스템 엔드포인트를 제공하지 않습니다.
+// 필요 시 /props 또는 /metrics를 사용하세요.

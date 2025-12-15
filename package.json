@@ -4,7 +4,10 @@
   "description": "Desktop wrapper for LLM Server UI",
   "main": "main.js",
   "scripts": {
-    "start": "concurrently \"npm run dev --prefix frontend\" \"wait-on http://localhost:5173 && electron .\"",
+    "client": "npm run dev --prefix frontend",
+    "server": "test -n \"$MODEL_PATH\" && ./llama.cpp/build/bin/llama-server --port ${LLAMA_PORT:-8080} --metrics --model \"$MODEL_PATH\"",
+    "desktop": "wait-on http://localhost:5173 && electron .",
+    "start": "npm run client",
     "build": "npm run build:native && vite build --prefix frontend && electron-builder",
     "build:native": "cd native && npm install && npm run build",
     "postinstall": "npm run build:native"

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './PerformancePanel.css';
 import TokenDebugPanel from './TokenDebugPanel';
+import { LLAMA_BASE_URL } from '../services/api';
 
 const PerformancePanel = () => {
   const [cpuUsage, setCpuUsage] = useState(0);
@@ -114,10 +115,30 @@ const PerformancePanel = () => {
           setMemoryUsage(Math.random() * 100);
         }
       } else {
-        // Fallback to mock data if Electron API not available
-        setCpuUsage(Math.random() * 100);
-        setGpuUsage(Math.random() * 100);
-        setMemoryUsage(Math.random() * 100);
+        // Electron이 없으면 llama-server /metrics 기준으로 최소한의 성능 지표만 표시
+        // (CPU/시스템 메모리는 서버 에이전트 없이 브라우저에서 가져올 수 없으므로 0으로 유지)
+        try {
+          const res = await fetch(`${LLAMA_BASE_URL}/metrics`, { signal: AbortSignal.timeout(1500) });
+          if (res.ok) {
+            const text = await res.text();
+            const vramTotalMatch = text.match(/llamacpp:vram_total_bytes\s+([\d.e+\-]+)/);
+            const vramUsedMatch = text.match(/llamacpp:vram_used_bytes\s+([\d.e+\-]+)/);
+            const tpsMatch = text.match(/llamacpp:predicted_tokens_seconds\s+([\d.e+\-]+)/);
+
+            if (vramTotalMatch) setVramTotal(Math.round(parseFloat(vramTotalMatch[1])));
+            if (vramUsedMatch) setVramUsed(Math.round(parseFloat(vramUsedMatch[1])));
+
+            if (tpsMatch) {
+              const tps = parseFloat(tpsMatch[1]);
+              // 처리량을 0~100으로 단순 스케일(표시용)
+              setGpuUsage(Math.max(0, Math.min(100, Math.round(tps))));
+            } else {
+              setGpuUsage(0);
+            }
+          }
+        } catch (_e) {
+          // 조용히 무시
+        }
       }
     };
 
