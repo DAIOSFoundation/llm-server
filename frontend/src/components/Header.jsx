@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import LanguageSelector from './LanguageSelector';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
+import { getActiveServerUrl } from '../services/api';
 import './Header.css';
 
 const Header = () => {
@@ -13,56 +14,212 @@ const Header = () => {
   const dropdownRef = useRef(null);
   const STORAGE_KEY = 'llmServerClientConfig';
 
+
   useEffect(() => {
+    let isInitialLoad = true;
+    
     const loadConfig = async (maybeConfig) => {
+      console.log('[Header][DEBUG] ===== loadConfig called =====');
+      console.log('[Header][DEBUG] isInitialLoad:', isInitialLoad);
+      console.log('[Header][DEBUG] maybeConfig:', maybeConfig);
+      console.log('[Header][DEBUG] current config.activeModelId:', config?.activeModelId);
+      
+      let cfg = null;
+      
       if (maybeConfig && maybeConfig.models) {
+        console.log('[Header][DEBUG] Using maybeConfig from parameter');
         // ensure activeModelId exists if models exist
-        const cfg = { ...maybeConfig };
+        cfg = { ...maybeConfig };
         if (!cfg.activeModelId && Array.isArray(cfg.models) && cfg.models.length > 0) {
+          console.log('[Header][DEBUG] No activeModelId, setting to first model:', cfg.models[0].id);
           cfg.activeModelId = cfg.models[0].id;
         }
-        setConfig(cfg);
-        return;
-      }
-      if (window.electronAPI) {
+      } else if (window.electronAPI) {
+        console.log('[Header][DEBUG] Electron mode: Loading config via IPC');
         const loadedConfig = await window.electronAPI.loadConfig();
+        console.log('[Header][DEBUG] Electron mode: Loaded config:', loadedConfig);
         // Ensure loadedConfig and its models property are not null/undefined
         if (loadedConfig && loadedConfig.models) {
-          setConfig(loadedConfig);
+          cfg = loadedConfig;
+          // ensure activeModelId exists if models exist
+          if (!cfg.activeModelId && Array.isArray(cfg.models) && cfg.models.length > 0) {
+            console.log('[Header][DEBUG] Electron mode: No activeModelId, setting to first model:', cfg.models[0].id);
+            cfg.activeModelId = cfg.models[0].id;
+          }
         }
       } else {
+        console.log('[Header][DEBUG] Client mode: Loading config from localStorage');
         try {
           const raw = localStorage.getItem(STORAGE_KEY);
+          console.log('[Header][DEBUG] Client mode: Raw localStorage value:', raw ? 'exists' : 'null');
           if (raw) {
             const parsed = JSON.parse(raw);
+            console.log('[Header][DEBUG] Client mode: Parsed config:', parsed);
             if (parsed && parsed.models) {
-              setConfig(parsed);
+              cfg = parsed;
+              // ensure activeModelId exists if models exist
+              if (!cfg.activeModelId && Array.isArray(cfg.models) && cfg.models.length > 0) {
+                console.log('[Header][DEBUG] Client mode: No activeModelId, setting to first model:', cfg.models[0].id);
+                cfg.activeModelId = cfg.models[0].id;
+              }
             }
           }
         } catch (_e) {
-          // ignore
+          console.error('[Header][DEBUG] Client mode: Error parsing localStorage:', _e);
         }
       }
+      
+      console.log('[Header][DEBUG] Final cfg:', cfg);
+      console.log('[Header][DEBUG] cfg.activeModelId:', cfg?.activeModelId);
+      
+      // config를 설정하고, activeModelId가 있으면 서버를 시작하도록 요청
+      if (cfg && cfg.models) {
+        const previousActiveModelId = config?.activeModelId;
+        console.log('[Header][DEBUG] Previous activeModelId:', previousActiveModelId);
+        console.log('[Header][DEBUG] New activeModelId:', cfg.activeModelId);
+        console.log('[Header][DEBUG] Models count:', cfg.models.length);
+        
+        setConfig(cfg);
+        
+        // activeModelId가 있으면 modelConfig도 업데이트하여 getActiveServerUrl()이 올바른 포트를 반환하도록 함
+        if (cfg.activeModelId) {
+          const activeModel = cfg.models.find(m => m.id === cfg.activeModelId);
+          if (activeModel) {
+            try {
+              localStorage.setItem('modelConfig', JSON.stringify(activeModel));
+              // config-updated 이벤트 발생시켜 PerformancePanel 등이 올바른 서버 URL로 재연결하도록 함
+              window.dispatchEvent(new CustomEvent('config-updated', { 
+                detail: { 
+                  contextSize: activeModel.contextSize || 2048,
+                  modelFormat: activeModel.modelFormat || 'gguf',
+                  activeModelId: cfg.activeModelId
+                } 
+              }));
+              // client-config-updated 이벤트도 발생시켜 다른 컴포넌트들이 config 변경을 감지하도록 함
+              window.dispatchEvent(new CustomEvent('client-config-updated', { 
+                detail: { config: cfg } 
+              }));
+            } catch (_e) {
+              // ignore
+            }
+          }
+        }
+        
+        // activeModelId가 있고, 이전과 다르거나 최초 로드인 경우 서버를 시작하도록 요청
+        if (cfg.activeModelId) {
+          const activeModel = cfg.models.find(m => m.id === cfg.activeModelId);
+          console.log('[Header][DEBUG] Active model found:', activeModel ? activeModel.id : 'NOT FOUND');
+          
+          if (activeModel) {
+            // activeModelId가 변경되었거나 최초 로드인 경우 서버 시작
+            const shouldStartServer = isInitialLoad || previousActiveModelId !== cfg.activeModelId;
+            console.log('[Header][DEBUG] shouldStartServer:', shouldStartServer);
+            console.log('[Header][DEBUG] - isInitialLoad:', isInitialLoad);
+            console.log('[Header][DEBUG] - previousActiveModelId !== cfg.activeModelId:', previousActiveModelId !== cfg.activeModelId);
+            console.log('[Header][DEBUG] - previousActiveModelId:', previousActiveModelId);
+            console.log('[Header][DEBUG] - cfg.activeModelId:', cfg.activeModelId);
+            
+            if (shouldStartServer) {
+              console.log('[Header][DEBUG] ✅ Starting server...');
+              console.log('[Header] Config loaded/updated: Active model found, triggering server start:', {
+                modelId: cfg.activeModelId,
+                previousModelId: previousActiveModelId,
+                isInitialLoad: isInitialLoad
+              });
+              
+              // 초기 로드 시에는 서버가 이미 실행 중이므로 config만 저장
+              if (window.electronAPI) {
+                console.log('[Header][DEBUG] Electron mode: Calling saveConfig...');
+                try {
+                  const result = await window.electronAPI.saveConfig(cfg);
+                  console.log('[Header][DEBUG] Electron mode: saveConfig result:', result);
+                  console.log('[Header] Electron mode: Config saved');
+                } catch (error) {
+                  console.error('[Header][DEBUG] Electron mode: saveConfig error:', error);
+                  console.error('[Header] Electron mode: Failed to save config on load:', error);
+                }
+              } else {
+                // 클라이언트 모드: /api/save-config 호출 (서버는 이미 실행 중)
+                console.log('[Header][DEBUG] Client mode: Calling /api/save-config...');
+                try {
+                  const response = await fetch('http://localhost:8083/api/save-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cfg),
+                  });
+                  if (response.ok) {
+                    const result = await response.json();
+                    console.log('[Header][DEBUG] Client mode: Config saved:', result);
+                  } else {
+                    const errorText = await response.text();
+                    console.error('[Header][DEBUG] Client mode: Failed to save config:', response.status, errorText);
+                  }
+                } catch (error) {
+                  console.error('[Header][DEBUG] Client mode: Error saving config:', error);
+                }
+              }
+            } else {
+              console.log('[Header][DEBUG] ❌ Skipping server start (shouldStartServer = false)');
+              console.log('[Header] Config loaded but activeModelId unchanged, skipping server start');
+            }
+          } else {
+            console.error('[Header][DEBUG] ❌ Active model not found in models array');
+            console.error('[Header][DEBUG] Looking for modelId:', cfg.activeModelId);
+            console.error('[Header][DEBUG] Available model IDs:', cfg.models.map(m => m.id));
+          }
+        } else {
+          console.log('[Header][DEBUG] ❌ No activeModelId in config');
+        }
+      } else {
+        console.log('[Header][DEBUG] ❌ No config or models found');
+        console.log('[Header][DEBUG] cfg:', cfg);
+        console.log('[Header][DEBUG] cfg.models:', cfg?.models);
+      }
+      
+      isInitialLoad = false;
+      console.log('[Header][DEBUG] ===== loadConfig completed =====');
     };
     loadConfig();
 
     const handleClientConfigUpdated = (event) => {
+      console.log('[Header][DEBUG] ===== handleClientConfigUpdated called =====');
+      console.log('[Header][DEBUG] event:', event);
+      console.log('[Header][DEBUG] event.detail:', event?.detail);
       const next = event?.detail?.config;
-      if (next) loadConfig(next);
+      console.log('[Header][DEBUG] next config:', next);
+      if (next) {
+        console.log('[Header][DEBUG] Calling loadConfig with next config');
+        loadConfig(next);
+      } else {
+        console.log('[Header][DEBUG] No next config, skipping loadConfig');
+      }
     };
 
     const handleStorage = (event) => {
+      console.log('[Header][DEBUG] ===== handleStorage called =====');
+      console.log('[Header][DEBUG] event.key:', event?.key);
+      console.log('[Header][DEBUG] STORAGE_KEY:', STORAGE_KEY);
       if (event && event.key === STORAGE_KEY) {
+        console.log('[Header][DEBUG] Storage key matches, parsing newValue');
         try {
           if (event.newValue) {
+            console.log('[Header][DEBUG] event.newValue exists, length:', event.newValue.length);
             const parsed = JSON.parse(event.newValue);
+            console.log('[Header][DEBUG] Parsed storage value:', parsed);
             if (parsed && parsed.models) {
+              console.log('[Header][DEBUG] Parsed config has models, calling loadConfig');
               loadConfig(parsed);
+            } else {
+              console.log('[Header][DEBUG] Parsed config missing models, skipping loadConfig');
             }
+          } else {
+            console.log('[Header][DEBUG] event.newValue is null/undefined');
           }
         } catch (_e) {
-          // ignore
+          console.error('[Header][DEBUG] Error parsing storage value:', _e);
         }
+      } else {
+        console.log('[Header][DEBUG] Storage key does not match, ignoring');
       }
     };
 
@@ -83,96 +240,160 @@ const Header = () => {
   }, []);
   
   const handleSelectModel = async (modelId) => {
+    console.log('[Header] ===== Model Selection Started =====');
+    console.log('[Header] Selected model ID:', modelId);
+    
     const newConfig = { ...config, activeModelId: modelId };
+    const activeModel = newConfig.models?.find(m => m.id === modelId);
+    
+    // 바로 모델 변경 수행 (서버는 자동으로 적절한 포트로 요청됨)
+    await performModelSwitch(modelId, newConfig, activeModel);
+  };
+
+  const performModelSwitch = async (modelId, newConfig, activeModel) => {
+    // config를 항상 업데이트하여 드롭다운이 올바른 모델을 표시하도록 함
+    console.log('[Header] performModelSwitch: Updating config', {
+      modelId,
+      newActiveModelId: newConfig.activeModelId,
+      currentActiveModelId: config.activeModelId
+    });
     setConfig(newConfig);
     setDropdownOpen(false);
+    
     if (window.electronAPI) {
-      await window.electronAPI.saveConfig(newConfig); // This will also restart the server
+      console.log('[Header] Electron mode: Saving config via IPC...');
+      try {
+        const result = await window.electronAPI.saveConfig(newConfig);
+        console.log('[Header] Electron mode: Config save result:', result);
+        if (result.success) {
+          console.log('[Header] ✅ Config saved successfully');
+        } else {
+          console.error('[Header] ❌ Config save failed:', result.error);
+        }
+      } catch (error) {
+        console.error('[Header] ❌ Error saving config via IPC:', error);
+      }
     } else {
+      // 클라이언트 모드: config.json을 업데이트하여 서버 전환 트리거
+      console.log('[Header] Client mode: Saving config to localStorage and API...');
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(newConfig));
-      } catch (_e) {
-        // ignore
+        console.log('[Header] Client mode: localStorage updated');
+        
+        // start-client-server.js의 /api/save-config 엔드포인트 호출
+        console.log('[Header] Client mode: Calling /api/save-config...');
+        const response = await fetch('http://localhost:8083/api/save-config', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(newConfig),
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          console.log('[Header] ✅ Client mode: Config saved to server:', result);
+        } else {
+          const errorText = await response.text();
+          console.error('[Header] ❌ Client mode: Failed to save config:', response.status, errorText);
+        }
+      } catch (error) {
+        console.error('[Header] ❌ Client mode: Error saving config:', error);
       }
     }
+    
+    console.log('[Header] ===== Model Selection Completed =====');
 
     // 클라이언트 추론 파라미터용 active model도 갱신
-    const models = newConfig?.models || [];
-    const activeModel = models.find(m => m.id === newConfig?.activeModelId);
     if (activeModel) {
       try {
         localStorage.setItem('modelConfig', JSON.stringify(activeModel));
         const contextSize = activeModel.contextSize || 2048;
-        window.dispatchEvent(new CustomEvent('config-updated', { detail: { contextSize } }));
-        window.dispatchEvent(new CustomEvent('config-updated'));
+        const modelFormat = activeModel.modelFormat || 'gguf';
+        // config-updated 이벤트 발생시켜 PerformancePanel 등이 올바른 서버 URL로 재연결하도록 함
+        window.dispatchEvent(new CustomEvent('config-updated', { 
+          detail: { 
+            contextSize,
+            modelFormat,
+            activeModelId: modelId
+          } 
+        }));
+        // client-config-updated 이벤트도 발생시켜 다른 컴포넌트들이 config 변경을 감지하도록 함
+        window.dispatchEvent(new CustomEvent('client-config-updated', { 
+          detail: { config: newConfig } 
+        }));
       } catch (_e) {
         // ignore
       }
     }
   };
 
+
   // Defensive coding: ensure config and config.models exist before trying to use them
   const models = config?.models || [];
   const activeModel = models.find(m => m.id === config?.activeModelId);
   const getModelLabel = (m) => (m?.modelPath || m?.name || '').trim();
 
+
   return (
-    <header className="app-header">
-      <div className="header-left">
-        <h1>LLM Server</h1>
-        <nav>
-          <NavLink to="/" className={({ isActive }) => (isActive ? 'active' : '')}>
-            Chat
-          </NavLink>
-          <NavLink to="/guide" className={({ isActive }) => (isActive ? 'active' : '')}>
-            {t('header.guide')}
-          </NavLink>
-          <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
-            {t('header.settings')}
-          </NavLink>
-        </nav>
-      </div>
-
-      <div className="header-center" ref={dropdownRef}>
-        <div className="model-selector-dropdown">
-          <button className="current-model-display" onClick={() => setDropdownOpen(!isDropdownOpen)}>
-            {activeModel ? (getModelLabel(activeModel) || t('header.selectModel')) : t('header.selectModel')}
-            <span className="dropdown-arrow">{isDropdownOpen ? '▲' : '▼'}</span>
-          </button>
-          {isDropdownOpen && (
-            <div className="model-dropdown-content">
-              {models.map(model => (
-                <div 
-                  key={model.id} 
-                  className="model-dropdown-item"
-                  onClick={() => handleSelectModel(model.id)}
-                >
-                  {getModelLabel(model) || model.id}
-                </div>
-              ))}
-            </div>
-          )}
+    <>
+      <header className="app-header">
+        <div className="header-left">
+          <h1>LLM Server</h1>
+          <nav>
+            <NavLink to="/" className={({ isActive }) => (isActive ? 'active' : '')}>
+              Chat
+            </NavLink>
+            <NavLink to="/guide" className={({ isActive }) => (isActive ? 'active' : '')}>
+              {t('header.guide')}
+            </NavLink>
+            <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
+              {t('header.settings')}
+            </NavLink>
+          </nav>
         </div>
-      </div>
 
-      <div className="header-right">
-        <LanguageSelector />
-        {auth?.authenticated ? (
-          <button
-            className="logout-icon-button"
-            title={t('header.logout')}
-            onClick={() => auth.logout()}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M10 17v-2h4v-6h-4V7l-5 5 5 5zm9-14h-8v2h8v14h-8v2h8a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"
-              />
-            </svg>
-          </button>
-        ) : null}
-      </div>
-    </header>
+        <div className="header-center" ref={dropdownRef}>
+          <div className="model-selector-dropdown">
+            <button className="current-model-display" onClick={() => setDropdownOpen(!isDropdownOpen)}>
+              {activeModel ? (getModelLabel(activeModel) || t('header.selectModel')) : t('header.selectModel')}
+              <span className="dropdown-arrow">{isDropdownOpen ? '▲' : '▼'}</span>
+            </button>
+            {isDropdownOpen && (
+              <div className="model-dropdown-content">
+                {models.map(model => (
+                  <div 
+                    key={model.id} 
+                    className="model-dropdown-item"
+                    onClick={() => handleSelectModel(model.id)}
+                  >
+                    {getModelLabel(model) || model.id}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="header-right">
+          <LanguageSelector />
+          {auth?.authenticated ? (
+            <button
+              className="logout-icon-button"
+              title={t('header.logout')}
+              onClick={() => auth.logout()}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M10 17v-2h4v-6h-4V7l-5 5 5 5zm9-14h-8v2h8v14h-8v2h8a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"
+                />
+              </svg>
+            </button>
+          ) : null}
+        </div>
+      </header>
+    </>
   );
 };
 

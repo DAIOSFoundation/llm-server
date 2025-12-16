@@ -8,8 +8,10 @@ const { URL } = require('url');
 let MlxServerNative = null;
 try {
   MlxServerNative = require('./native');
+  console.log('[MLX Server] C++ native module loaded successfully');
 } catch (error) {
-  console.warn('[MLX Server] Native module not available, using Python fallback');
+  console.error('[MLX Server] ❌ C++ native module not available:', error.message);
+  throw new Error('MLX C++ native module is required. Please build it with: cd mlx && npm run build');
 }
 
 class MlxServer {
@@ -18,7 +20,7 @@ class MlxServer {
     this.modelPath = modelConfig.modelPath;
     this.modelDir = path.join(__dirname, 'models', this.modelPath);
     this.server = null;
-    this.port = 8080;
+    this.port = 8081; // MLX 서버는 8081 포트 사용
     this.isModelLoaded = false;
     this.modelMeta = null;
     this.loadStartTime = null;
@@ -71,12 +73,23 @@ class MlxServer {
         this.handleRequest(req, res);
       });
 
-      this.server.listen(this.port, () => {
-        console.log(`[MLX] Server started on port ${this.port}`);
-        console.log(`[MLX] Model loaded: ${this.modelPath}`);
-      });
+      return new Promise((resolve, reject) => {
+        this.server.on('error', (err) => {
+          if (err.code === 'EADDRINUSE') {
+            console.error(`[MLX] Port ${this.port} is already in use. Please stop the existing server.`);
+            reject(new Error(`Port ${this.port} is already in use`));
+          } else {
+            console.error(`[MLX] Server error:`, err);
+            reject(err);
+          }
+        });
 
-      return this.server;
+        this.server.listen(this.port, () => {
+          console.log(`[MLX] Server started on port ${this.port}`);
+          console.log(`[MLX] Model loaded: ${this.modelPath}`);
+          resolve(this.server);
+        });
+      });
     } catch (error) {
       console.error(`[MLX] Failed to start server:`, error);
       throw error;
@@ -87,7 +100,7 @@ class MlxServer {
     // CORS 헤더 설정
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-LLM-UI-Auth');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(200);
@@ -162,6 +175,10 @@ class MlxServer {
       // Detokenize
       else if (pathname === '/detokenize' && req.method === 'POST') {
         await this.handleDetokenize(req, res);
+      }
+      // Logs Stream (SSE)
+      else if (pathname === '/logs/stream' && req.method === 'GET') {
+        await this.handleLogsStream(req, res);
       }
       // Apply template
       else if (pathname === '/apply-template' && req.method === 'POST') {
@@ -650,12 +667,23 @@ llamacpp:predicted_tokens_seconds 0
         
         console.log(`[MLX] Tokenizing content, length: ${content.length}`);
         
-        // Python 스크립트를 통해 토큰화
-        const tokens = await this.tokenize(content);
-        
-        // llama.cpp 형식으로 응답: { tokens: number[] }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ tokens }));
+        // C++ native 모듈만 사용 (Python fallback 제거)
+        if (!MlxServerNative) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'MLX C++ native module is not available' }));
+          return;
+        }
+
+        try {
+          const nativeServer = new MlxServerNative(this.modelDir);
+          const tokens = nativeServer.inference.tokenize(content);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ tokens: Array.from(tokens) }));
+        } catch (error) {
+          console.error('[MLX] Native tokenize error:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Tokenization failed: ${error.message}` }));
+        }
       } catch (error) {
         console.error('[MLX] Tokenize error:', error);
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -672,14 +700,22 @@ llamacpp:predicted_tokens_seconds 0
         const payload = JSON.parse(body);
         const { tokens } = payload;
         
-        // Python 스크립트를 통해 디토큰화
-        const content = await this.detokenize(tokens);
+        // C++ native 모듈만 사용 (Python fallback 제거)
+        if (!MlxServerNative) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'MLX C++ native module is not available' }));
+          return;
+        }
+
+        const nativeServer = new MlxServerNative(this.modelDir);
+        const content = nativeServer.inference.decode(tokens);
         
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ content }));
       } catch (error) {
+        console.error('[MLX] Native detokenize error:', error);
         res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: error.message }));
+        res.end(JSON.stringify({ error: `Detokenization failed: ${error.message}` }));
       }
     });
   }
@@ -827,27 +863,45 @@ llamacpp:predicted_tokens_seconds 0
   async tokenize(content) {
     // Python 스크립트를 통해 토큰화
     return new Promise((resolve, reject) => {
-      const scriptPath = path.join(__dirname, 'tokenize.py');
+      const scriptPath = path.join(__dirname, 'mlx_tokenize_script.py');
       this.createTokenizeScript(scriptPath);
       
       const pythonProcess = spawn('python3', [scriptPath, '--model', this.modelDir, '--text', content]);
       let output = '';
+      let errorOutput = '';
       
       pythonProcess.stdout.on('data', (data) => {
         output += data.toString();
       });
       
+      pythonProcess.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+      
       pythonProcess.on('close', (code) => {
         if (code === 0) {
           try {
-            const result = JSON.parse(output);
-            resolve(result.tokens || []);
+            const result = JSON.parse(output.trim());
+            if (result.error) {
+              reject(new Error(result.error));
+            } else {
+              resolve(result.tokens || []);
+            }
           } catch (e) {
-            reject(new Error('Failed to parse tokenize output'));
+            console.error(`[MLX] Failed to parse tokenize output:`, output);
+            console.error(`[MLX] Error output:`, errorOutput);
+            reject(new Error(`Failed to parse tokenize output: ${e.message}`));
           }
         } else {
-          reject(new Error(`Tokenize failed with code ${code}`));
+          console.error(`[MLX] Tokenize script failed with code ${code}`);
+          console.error(`[MLX] Error output:`, errorOutput);
+          reject(new Error(`Tokenize failed with code ${code}: ${errorOutput}`));
         }
+      });
+      
+      pythonProcess.on('error', (error) => {
+        console.error(`[MLX] Failed to spawn tokenize process:`, error);
+        reject(new Error(`Failed to spawn tokenize process: ${error.message}`));
       });
     });
   }
@@ -943,36 +997,46 @@ llamacpp:predicted_tokens_seconds 0
   }
 
   async streamCompletion(prompt, options, res) {
-    // C++ native 모듈 사용 시도
-    if (MlxServerNative) {
-      try {
-        const nativeServer = new MlxServerNative(this.modelDir);
-        
-        await nativeServer.generateStream(
-          prompt,
-          {
-            temperature: options.temperature,
-            topK: options.top_k,
-            topP: options.top_p,
-            minP: options.min_p,
-            typicalP: options.typical_p,
-            tfsZ: options.tfs_z,
-            repeatPenalty: options.repeat_penalty,
-            repeatLastN: options.repeat_last_n,
-            presencePenalty: options.presence_penalty,
-            frequencyPenalty: options.frequency_penalty,
-            dryMultiplier: options.dry_multiplier,
-            dryBase: options.dry_base,
-            dryAllowedLength: options.dry_allowed_length,
-            dryPenaltyLastN: options.dry_penalty_last_n,
-            mirostat: options.mirostat,
-            mirostatTau: options.mirostat_tau,
-            mirostatEta: options.mirostat_eta,
-            maxTokens: options.max_tokens,
-            stop: options.stop || [],
-            seed: options.seed,
-          },
-          (data) => {
+    // C++ native 모듈만 사용 (Python fallback 제거)
+    if (!MlxServerNative) {
+      const errorMsg = 'MLX C++ native module is not available. Please build it with: cd mlx && npm run build';
+      console.error(`[MLX] ${errorMsg}`);
+      if (!res.writableEnded) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: errorMsg }));
+      }
+      return;
+    }
+
+    try {
+      const nativeServer = new MlxServerNative(this.modelDir);
+      
+      await nativeServer.generateStream(
+        prompt,
+        {
+          temperature: options.temperature,
+          topK: options.top_k,
+          topP: options.top_p,
+          minP: options.min_p,
+          typicalP: options.typical_p,
+          tfsZ: options.tfs_z,
+          repeatPenalty: options.repeat_penalty,
+          repeatLastN: options.repeat_last_n,
+          presencePenalty: options.presence_penalty,
+          frequencyPenalty: options.frequency_penalty,
+          dryMultiplier: options.dry_multiplier,
+          dryBase: options.dry_base,
+          dryAllowedLength: options.dry_allowed_length,
+          dryPenaltyLastN: options.dry_penalty_last_n,
+          mirostat: options.mirostat,
+          mirostatTau: options.mirostat_tau,
+          mirostatEta: options.mirostat_eta,
+          maxTokens: options.max_tokens,
+          stop: options.stop || [],
+          seed: options.seed,
+        },
+        (data) => {
+          if (!res.writableEnded) {
             if (data.token) {
               res.write(`data: ${JSON.stringify({ content: data.token })}\n\n`);
             }
@@ -984,119 +1048,30 @@ llamacpp:predicted_tokens_seconds 0
               res.write(`data: ${JSON.stringify({ error: data.error })}\n\n`);
               res.end();
             }
-          },
-          (error) => {
-            res.write(`data: ${JSON.stringify({ error: error })}\n\n`);
-            res.end();
-          },
-          () => {
-            if (!res.writableEnded) {
-              res.write(`data: ${JSON.stringify({ stop: true })}\n\n`);
-              res.end();
-            }
           }
-        );
-        return;
-      } catch (error) {
-        console.error('[MLX] Native module error, falling back to Python:', error);
-      }
-    }
-    
-    // Python 스크립트를 호출하여 MLX 모델 실행 (Fallback)
-    const pythonScript = path.join(__dirname, 'inference.py');
-    
-    if (!fs.existsSync(pythonScript)) {
-      this.createInferenceScript(pythonScript);
-    }
-
-    const optionsJson = JSON.stringify(options);
-    const pythonArgs = [
-      pythonScript,
-      '--model', this.modelDir,
-      '--prompt', prompt,
-      '--options', optionsJson,
-    ];
-
-    console.log(`[MLX] Starting Python inference process`);
-    console.log(`[MLX] Model dir: ${this.modelDir}`);
-    console.log(`[MLX] Script: ${pythonScript}`);
-    
-    const pythonProcess = spawn('python3', pythonArgs);
-
-    let buffer = '';
-    let stderrBuffer = '';
-    
-    pythonProcess.stdout.on('data', (data) => {
-      buffer += data.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed.token) {
-            res.write(`data: ${JSON.stringify({ content: parsed.token })}\n\n`);
-          }
-          if (parsed.stop) {
+        },
+        (error) => {
+          console.error('[MLX] Native module error:', error);
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ error: String(error) })}\n\n`);
             res.write(`data: ${JSON.stringify({ stop: true })}\n\n`);
             res.end();
-            return;
           }
-          if (parsed.error) {
-            console.error(`[MLX Python] Error:`, parsed.error);
-            res.write(`data: ${JSON.stringify({ error: parsed.error })}\n\n`);
+        },
+        () => {
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ stop: true })}\n\n`);
             res.end();
-            return;
           }
-        } catch (e) {
-          console.error(`[MLX] Failed to parse line: ${line}`, e.message);
         }
-      }
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      stderrBuffer += data.toString();
-      const lines = stderrBuffer.split('\n');
-      stderrBuffer = lines.pop() || '';
-      
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed.status) {
-            console.log(`[MLX Python] Status: ${parsed.status}`);
-          }
-          if (parsed.warning) {
-            console.warn(`[MLX Python] Warning: ${parsed.warning}`);
-          }
-        } catch (e) {
-          // 일반 stderr 출력
-          console.error(`[MLX Python] ${line}`);
-        }
-      }
-    });
-
-    pythonProcess.on('close', (code) => {
-      if (buffer.trim()) {
-        try {
-          const parsed = JSON.parse(buffer.trim());
-          if (parsed.token) {
-            res.write(`data: ${JSON.stringify({ content: parsed.token })}\n\n`);
-          }
-        } catch (e) {
-          // 무시
-        }
-      }
-      
-      if (code !== 0 && !res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ error: `Process exited with code ${code}` })}\n\n`);
-      }
+      );
+    } catch (error) {
+      console.error('[MLX] Native module initialization error:', error);
       if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ stop: true })}\n\n`);
-        res.end();
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Failed to initialize MLX C++ native module: ${error.message}` }));
       }
-    });
+    }
   }
 
   createInferenceScript(scriptPath) {
@@ -1105,7 +1080,7 @@ import json
 import sys
 import argparse
 import mlx.core as mx
-from mlx_lm import load, generate_stepwise
+from mlx_lm import load, stream_generate
 
 def main():
     parser = argparse.ArgumentParser()
@@ -1159,13 +1134,12 @@ def main():
         # 스트리밍 생성
         print(json.dumps({'status': 'generating'}), flush=True, file=sys.stderr)
         generated_text = ''
-        for token, prob in generate_stepwise(
+        for token_str in stream_generate(
             model, tokenizer, 
             prompt=args.prompt,
             **generate_kwargs
         ):
-            if token:
-                token_str = tokenizer.decode([token]) if isinstance(token, int) else str(token)
+            if token_str:
                 generated_text += token_str
                 print(json.dumps({'token': token_str}), flush=True)
                 
@@ -1299,11 +1273,84 @@ if __name__ == '__main__':
     fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
   }
 
-  stop() {
-    if (this.server) {
-      this.server.close();
-      this.server = null;
+  async handleLogsStream(req, res) {
+    // 로그 스트림 엔드포인트 (SSE)
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    });
+
+    // 로그 버퍼 (최근 로그 저장)
+    if (!this.logBuffer) {
+      this.logBuffer = [];
+      this.maxLogBufferSize = 1000;
     }
+
+    // 기존 로그 전송
+    const sendLog = (text) => {
+      const logData = {
+        text: text,
+        timestamp: new Date().toISOString()
+      };
+      res.write(`event: log\ndata: ${JSON.stringify(logData)}\n\n`);
+    };
+
+    // 버퍼에 있는 로그 전송
+    this.logBuffer.forEach(log => {
+      sendLog(log);
+    });
+
+    // 새로운 로그를 받기 위한 리스너
+    const logListener = (message) => {
+      if (typeof message === 'string') {
+        this.logBuffer.push(message);
+        if (this.logBuffer.length > this.maxLogBufferSize) {
+          this.logBuffer.shift();
+        }
+        sendLog(message);
+      }
+    };
+
+    // console.log, console.error를 가로채서 로그 수집
+    const originalLog = console.log;
+    const originalError = console.error;
+    
+    console.log = (...args) => {
+      const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
+      logListener(message);
+      originalLog.apply(console, args);
+    };
+
+    console.error = (...args) => {
+      const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
+      logListener(message);
+      originalError.apply(console, args);
+    };
+
+    // 클라이언트 연결 종료 감지
+    req.on('close', () => {
+      console.log = originalLog;
+      console.error = originalError;
+      console.log('[MLX] Log stream closed');
+    });
+  }
+
+  stop() {
+    return new Promise((resolve) => {
+      if (this.server) {
+        console.log(`[MLX] Stopping server on port ${this.port}`);
+        this.server.close(() => {
+          console.log(`[MLX] Server stopped`);
+          this.server = null;
+          this.isModelLoaded = false;
+          this.modelMeta = null;
+          resolve();
+        });
+      } else {
+        resolve();
+      }
+    });
   }
 }
 

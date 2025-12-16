@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './PerformancePanel.css';
 import TokenDebugPanel from './TokenDebugPanel';
-import { LLAMA_BASE_URL } from '../services/api';
+import { getActiveServerUrl } from '../services/api';
 
 const PerformancePanel = () => {
   const [cpuUsage, setCpuUsage] = useState(0);
@@ -188,6 +188,7 @@ const PerformancePanel = () => {
     let reconnectTimer = null;
     let probeTimer = null;
     let currentModelId = '';
+    let currentServerUrl = '';
 
     const close = () => {
       if (eventSourceRef.current) {
@@ -211,20 +212,26 @@ const PerformancePanel = () => {
       const modelId = getActiveModelIdForMetrics();
       if (!modelId) {
         currentModelId = '';
+        currentServerUrl = '';
         close();
         return;
       }
 
-      // already connected for this model
-      if (eventSourceRef.current && currentModelId === modelId) {
+      // 현재 서버 URL 가져오기
+      const serverUrl = getActiveServerUrl();
+
+      // 이미 같은 모델과 서버 URL로 연결되어 있으면 재연결하지 않음
+      if (eventSourceRef.current && currentModelId === modelId && currentServerUrl === serverUrl) {
         return;
       }
 
+      // 모델이나 서버 URL이 변경되었으면 재연결
       currentModelId = modelId;
+      currentServerUrl = serverUrl;
       close();
 
       // autoload=1 ensures router spawns the model process even if not already loaded
-      const url = `${LLAMA_BASE_URL}/metrics/stream?model=${encodeURIComponent(modelId)}&interval_ms=1000&autoload=1`;
+      const url = `${serverUrl}/metrics/stream?model=${encodeURIComponent(modelId)}&interval_ms=1000&autoload=1`;
       const es = new EventSource(url);
       eventSourceRef.current = es;
 
@@ -288,9 +295,14 @@ const PerformancePanel = () => {
     // connect immediately and reconnect when config changes
     connect();
     const onConfigUpdated = () => {
+      // config가 변경되었으면 현재 연결 정보를 초기화하고 재연결
       currentModelId = '';
+      currentServerUrl = '';
       close();
-      connect();
+      // 약간의 지연을 두어 localStorage가 완전히 업데이트되도록 함
+      setTimeout(() => {
+        connect();
+      }, 100);
     };
 
     window.addEventListener('client-config-updated', onConfigUpdated);
@@ -298,11 +310,12 @@ const PerformancePanel = () => {
     window.addEventListener('storage', onConfigUpdated);
 
     // Fallback: when localStorage is updated in the same tab, the 'storage' event doesn't fire.
-    // Probe the active model id locally and connect once it becomes available.
+    // Probe the active model id and server URL locally and connect once they change.
     probeTimer = window.setInterval(() => {
       if (stopped) return;
       const modelId = getActiveModelIdForMetrics();
-      if (modelId && (!eventSourceRef.current || modelId !== currentModelId)) {
+      const serverUrl = getActiveServerUrl();
+      if (modelId && (!eventSourceRef.current || modelId !== currentModelId || serverUrl !== currentServerUrl)) {
         connect();
       }
     }, 1000);

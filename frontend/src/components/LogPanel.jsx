@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import PerformancePanel from './PerformancePanel';
 import './LogPanel.css';
-import { LLAMA_BASE_URL } from '../services/api';
+import { getActiveServerUrl } from '../services/api';
 
 const LogPanel = () => {
   const [activeTab, setActiveTab] = useState('performance');
@@ -47,7 +47,8 @@ const LogPanel = () => {
 
     const run = async () => {
       try {
-        const res = await fetch(`${LLAMA_BASE_URL}/logs/stream`, {
+        const serverUrl = getActiveServerUrl();
+        const res = await fetch(`${serverUrl}/logs/stream`, {
           method: 'GET',
           headers: token ? { 'X-LLM-UI-Auth': token } : {},
           signal: ctrl.signal,

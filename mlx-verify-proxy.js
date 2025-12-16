@@ -74,8 +74,8 @@ const proxyServer = http.createServer((req, res) => {
   }
 });
 
-// 포트 8081에서 실행 (llama.cpp 서버는 8080 사용)
-const PORT = 8081;
+// 포트 8084에서 실행
+const PORT = 8084;
 proxyServer.listen(PORT, () => {
   console.log(`[MLX Verify Proxy] Server running on port ${PORT}`);
 });

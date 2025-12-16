@@ -1,6 +1,11 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { LLAMA_BASE_URL } from '../services/api';
 
+// 인증 서버는 별도 포트(8082)에서 실행
+const AUTH_BASE_URL = typeof window !== 'undefined' && window.location.hostname === 'localhost'
+  ? 'http://localhost:8082'
+  : (LLAMA_BASE_URL || 'http://localhost:8080').replace(':8080', ':8082');
+
 const AuthContext = createContext(null);
 
 const TOKEN_KEY = 'llmServerUiAuthToken';
@@ -38,7 +43,7 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     try {
       const token = getToken();
-      const res = await fetch(`${LLAMA_BASE_URL}/auth/status`, {
+      const res = await fetch(`${AUTH_BASE_URL}/auth/status`, {
         method: 'GET',
         headers: token ? { 'X-LLM-UI-Auth': token } : {},
         // Router mode can be busy (model load / IO). Avoid flipping UI to "not initialized"
@@ -65,7 +70,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const setup = async ({ superAdminId: id, password }) => {
-    const res = await fetch(`${LLAMA_BASE_URL}/auth/setup`, {
+    const res = await fetch(`${AUTH_BASE_URL}/auth/setup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ superAdminId: id, password }),
@@ -80,7 +85,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const login = async ({ superAdminId: id, password }) => {
-    const res = await fetch(`${LLAMA_BASE_URL}/auth/login`, {
+    const res = await fetch(`${AUTH_BASE_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ superAdminId: id, password }),
@@ -98,7 +103,7 @@ export const AuthProvider = ({ children }) => {
   const logout = async () => {
     try {
       const token = getToken();
-      await fetch(`${LLAMA_BASE_URL}/auth/logout`, {
+      await fetch(`${AUTH_BASE_URL}/auth/logout`, {
         method: 'POST',
         headers: token ? { 'X-LLM-UI-Auth': token } : {},
         signal: AbortSignal.timeout(2000),

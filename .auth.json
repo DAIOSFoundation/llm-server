@@ -1,0 +1,6 @@
+{
+  "super_admin_id": "superadmin",
+  "salt_hex": "a834059d6dd1cf2bf6bcbb420bdc9258",
+  "hash_hex": "1f773e1fe5d4849863c04c3a9938b17cb5d5945eb6584290c3b1d9d2ea1026fd",
+  "iterations": 100000
+}

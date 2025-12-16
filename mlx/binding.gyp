@@ -23,6 +23,10 @@
         "MACOSX_DEPLOYMENT_TARGET": "10.13",
         "OTHER_CPLUSPLUSFLAGS": [
           "-std=c++17"
+        ],
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "/opt/homebrew/lib",
+          "/usr/local/lib"
         ]
       },
       "defines": [ "NAPI_DISABLE_CPP_EXCEPTIONS" ]

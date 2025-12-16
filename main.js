@@ -9,6 +9,7 @@ const { promisify } = require('util');
 const configPath = path.join(app.getPath('userData'), 'config.json');
 let llamaServerProcess = null;
 let mlxServerInstance = null; // MLX 서버 인스턴스
+let authServerInstance = null; // 인증 서버 인스턴스
 let mainWindow = null;
 let cachedVramTotal = 0; // VRAM 용량 캐싱
 let cachedVramUsed = 0; // VRAM 사용량 (바이트) - 0으로 초기화
@@ -370,49 +371,91 @@ function initializeConfig() {
 }
 
 function stopCurrentServer() {
-  // 현재 실행 중인 서버 종료
-  if (llamaServerProcess) {
-    console.log(`[Server] Stopping ${currentServerType || 'current'} server`);
-    try {
-      if (currentServerType === 'mlx' && mlxServerInstance) {
-        // MLX 서버 종료
-        console.log(`[Server] Stopping MLX server instance`);
-        mlxServerInstance.stop();
-        mlxServerInstance = null;
-      } else if (currentServerType === 'gguf') {
-        // llama.cpp 서버 종료
-        console.log(`[Server] Killing llama.cpp server process`);
-        llamaServerProcess.kill('SIGTERM');
-        // 프로세스가 종료될 때까지 잠시 대기
-        setTimeout(() => {
-          if (llamaServerProcess && !llamaServerProcess.killed) {
-            console.log(`[Server] Force killing llama.cpp server process`);
-            llamaServerProcess.kill('SIGKILL');
+  return new Promise((resolve) => {
+    // 현재 실행 중인 서버 종료
+    if (llamaServerProcess) {
+      console.log(`[Server] Stopping ${currentServerType || 'current'} server`);
+      try {
+        if (currentServerType === 'mlx' && mlxServerInstance) {
+          // MLX 서버 종료
+          console.log(`[Server] Stopping MLX server instance`);
+          mlxServerInstance.stop().then(() => {
+            mlxServerInstance = null;
+            llamaServerProcess = null;
+            currentModelConfig = null;
+            currentServerType = null;
+            cachedVramUsed = 0;
+            resolve();
+          }).catch((error) => {
+            console.error(`[Server] Error stopping MLX server:`, error);
+            mlxServerInstance = null;
+            llamaServerProcess = null;
+            currentModelConfig = null;
+            currentServerType = null;
+            cachedVramUsed = 0;
+            resolve();
+          });
+        } else if (currentServerType === 'gguf' || !currentServerType) {
+          // llama.cpp 서버 종료 (currentServerType이 null이어도 프로세스가 있으면 종료)
+          console.log(`[Server] Killing llama.cpp server process`);
+          const processToKill = llamaServerProcess;
+          
+          // 프로세스 종료 이벤트 리스너
+          const onClose = () => {
+            console.log(`[Server] llama.cpp server process terminated`);
+            llamaServerProcess = null;
+            currentModelConfig = null;
+            currentServerType = null;
+            cachedVramUsed = 0;
+            resolve();
+          };
+          
+          if (processToKill.on) {
+            processToKill.once('close', onClose);
+            processToKill.kill('SIGTERM');
+            
+            // 강제 종료 타이머
+            setTimeout(() => {
+              if (processToKill && !processToKill.killed) {
+                console.log(`[Server] Force killing llama.cpp server process`);
+                processToKill.kill('SIGKILL');
+                setTimeout(onClose, 100);
+              }
+            }, 1500);
+          } else {
+            // 프로세스 객체가 아닌 경우 (예: MLX 서버 래퍼)
+            if (typeof processToKill.kill === 'function') {
+              processToKill.kill();
+            }
+            setTimeout(onClose, 100);
           }
-        }, 1000);
-      } else {
-        // 알 수 없는 타입이지만 프로세스가 있으면 종료 시도
-        console.log(`[Server] Attempting to kill unknown server type`);
-        if (typeof llamaServerProcess.kill === 'function') {
-          llamaServerProcess.kill('SIGTERM');
+        } else {
+          // 알 수 없는 타입이지만 프로세스가 있으면 종료 시도
+          console.log(`[Server] Attempting to kill unknown server type`);
+          if (typeof llamaServerProcess.kill === 'function') {
+            llamaServerProcess.kill('SIGTERM');
+          }
+          setTimeout(() => {
+            llamaServerProcess = null;
+            currentModelConfig = null;
+            currentServerType = null;
+            cachedVramUsed = 0;
+            resolve();
+          }, 500);
         }
+      } catch (error) {
+        console.error(`[Server] Error stopping server:`, error);
+        llamaServerProcess = null;
+        currentModelConfig = null;
+        currentServerType = null;
+        cachedVramUsed = 0;
+        resolve();
       }
-    } catch (error) {
-      console.error(`[Server] Error stopping server:`, error);
+    } else {
+      console.log(`[Server] No server process to stop`);
+      resolve();
     }
-    
-    // 상태 초기화는 즉시 수행하지 않고, 프로세스 종료 이벤트에서 처리
-    // (gguf 서버의 경우 on('close') 이벤트에서 처리됨)
-    if (currentServerType === 'mlx') {
-      // MLX 서버는 즉시 초기화
-      llamaServerProcess = null;
-      currentModelConfig = null;
-      currentServerType = null;
-      cachedVramUsed = 0;
-    }
-  } else {
-    console.log(`[Server] No server process to stop`);
-  }
+  });
 }
 
 function startLlamaServer(modelConfig) {
@@ -448,13 +491,19 @@ function startLlamaServer(modelConfig) {
     console.log(`[Server]   - New: ${modelFormat}/${id}`);
     
     // 형식이 다르거나 같은 형식이어도 재시작 필요
-    stopCurrentServer();
-    
-    // 서버 종료 대기 후 새 서버 시작 (비동기 처리)
-    setTimeout(() => {
-      console.log(`[Server] Starting new server after stop delay`);
-      startServerByFormat(modelConfig);
-    }, 1000); // 500ms -> 1000ms로 증가하여 서버 종료 시간 확보
+    stopCurrentServer().then(() => {
+      console.log(`[Server] Server stopped, starting new server`);
+      // 서버 종료 후 약간의 대기 시간을 두고 새 서버 시작
+      setTimeout(() => {
+        startServerByFormat(modelConfig);
+      }, 500);
+    }).catch((error) => {
+      console.error(`[Server] Error stopping server:`, error);
+      // 에러가 발생해도 새 서버 시작 시도
+      setTimeout(() => {
+        startServerByFormat(modelConfig);
+      }, 1000);
+    });
     return;
   }
 
@@ -593,9 +642,19 @@ async function startMlxServer(modelConfig) {
   }
 }
 
+function startAuthServer() {
+  // 인증 서버는 별도로 실행 (포트 8081)
+  if (!authServerInstance) {
+    const AuthServer = require('./auth-server');
+    authServerInstance = AuthServer;
+    console.log('[Main] Auth server started on port 8081');
+  }
+}
+
 app.whenReady().then(() => {
   initVRAMInfo();
   initializeConfig();
+  startAuthServer(); // 인증 서버 시작
 
   ipcMain.handle('load-config', async () => {
     try {

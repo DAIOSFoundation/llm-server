@@ -22,8 +22,11 @@ llm-server/
 │  ├─ native.js              # Node.js wrapper
 │  └─ models/                # MLX model directory
 ├─ native/                   # Metal VRAM monitor (native module)
+├─ auth-server.js            # Authentication server (port 8082)
+├─ start-client-server.js    # Client server manager (port 8083)
+├─ config.json               # Client-side model configuration
 ├─ models-config.json        # (server) per-model load options (router)
-├─ user_pw.json              # (server) super-admin password hash file (gitignore)
+├─ .auth.json                # Super-admin password hash file (PBKDF2, gitignore)
 ├─ main.js / preload.js      # (optional) Electron wrapper
 └─ package.json              # run/build scripts
 ```
@@ -32,13 +35,15 @@ llm-server/
 
 ## Key Features
 
-- **Dual Model Format Support**
-  - **GGUF Format**: Uses `llama.cpp`'s `llama-server` for GGUF models
-  - **MLX Format**: Uses MLX C++ API for MLX models (Apple Silicon optimized)
-  - Automatic server switching based on selected model format
+- **Dual Model Format Support (GGUF/MLX)**
+  - **GGUF Format**: Uses `llama.cpp`'s `llama-server` for GGUF models (Port 8080)
+  - **MLX Format**: Uses MLX C++ API for MLX models (Port 8081, Apple Silicon optimized)
+  - **Dual Server Architecture**: Both servers run simultaneously; frontend automatically selects the correct port based on model format
+  - No server restart required when switching models - frontend simply changes the endpoint
 - **Login (Super Admin)**
+  - Separate authentication server (Port 8082) - login works even if model servers are down
   - Create a super-admin account on first run → then login on subsequent runs
-  - Password is stored in `user_pw.json` on the server as **salt + iterative SHA-256 hash** (no plaintext storage)
+  - Password is stored in `.auth.json` as **PBKDF2 hash** (no plaintext storage)
 - **Model Configuration & Management**
   - Add/edit/delete multiple models by **Model ID** (= model name in router mode)
   - Model format selection (GGUF/MLX) with automatic path validation
@@ -67,34 +72,56 @@ llm-server/
 
 ---
 
+## Server Architecture
+
+The application uses a **multi-server architecture** with separate ports for different services:
+
+- **GGUF Server** (Port 8080): `llama.cpp`'s `llama-server` for GGUF models
+- **MLX Server** (Port 8081): MLX C++ API server for MLX models
+- **Authentication Server** (Port 8082): Handles login/logout/setup independently
+- **Client Server Manager** (Port 8083): Manages model servers in client-only mode
+
+Both GGUF and MLX servers run **simultaneously**. The frontend automatically selects the correct port based on the selected model's format.
+
 ## Server API Summary
 
-### llama.cpp Server (GGUF Models)
+### llama.cpp Server (GGUF Models) - Port 8080
 
 - **Health**: `GET /health`
 - **Models (Router Mode)**: `GET /models`
 - **Model control (Router Mode)**
   - `POST /models/load` / `POST /models/unload`
   - `GET /models/config` / `POST /models/config` (stored in server-side `models-config.json`)
+- **Completion**: `POST /completion` (streaming SSE)
 - **Metrics**
   - `GET /metrics` (Prometheus text)
   - `GET /metrics/stream` (SSE, for the real-time panel)
 - **GGUF info**: `POST /gguf-info` (server reads a GGUF file and returns metadata JSON)
-- **UI Auth**
-  - `GET /auth/status`
-  - `POST /auth/setup`
-  - `POST /auth/login`
-  - `POST /auth/logout`
+- **Tokenization**: `POST /tokenize` (text to tokens)
+- **Logs**: `GET /logs/stream` (SSE, server logs)
 
-### MLX Server (MLX Models)
+### MLX Server (MLX Models) - Port 8081
 
 - **Health**: `GET /health`
+- **Models**: `GET /models`
 - **Completion**: `POST /completion` (streaming SSE)
 - **Metrics**
   - `GET /metrics` (VRAM and performance metrics)
   - `GET /metrics/stream` (SSE, for the real-time panel)
 - **Tokenization**: `POST /tokenize` (text to tokens)
 - **Model Verification**: `POST /mlx-verify` (verify MLX model directory and config.json)
+- **Logs**: `GET /logs/stream` (SSE, server logs)
+
+### Authentication Server - Port 8082
+
+- **Status**: `GET /auth/status`
+- **Setup**: `POST /auth/setup` (create super-admin account)
+- **Login**: `POST /auth/login`
+- **Logout**: `POST /auth/logout`
+
+### Client Server Manager - Port 8083
+
+- **Save Config**: `POST /api/save-config` (save model configuration, triggers server management)
 
 ---
 
@@ -190,21 +217,25 @@ Default options (root `package.json`):
 - `--models-dir "./llama.cpp/models"`
 - `--models-config "./models-config.json"`
 
-#### MLX Models
+#### Client Mode (Standalone Frontend)
 
-MLX 서버는 자동으로 시작됩니다. 모델 형식을 MLX로 선택하면 자동으로 MLX 서버가 시작되고 llama.cpp 서버는 중지됩니다.
-
-또는 수동으로 실행:
+클라이언트 모드에서는 `start-client-server.js`가 자동으로 두 서버를 관리합니다:
 
 ```bash
-npm run server:mlx-proxy  # MLX 모델 검증 프록시 (포트 8081)
+npm run client:all  # 프론트엔드 + 클라이언트 서버 관리자 동시 실행
 ```
 
-#### Both Servers
+또는 개별 실행:
 
 ```bash
-npm run server:all  # llama.cpp 서버 + MLX 프록시 동시 실행
+npm run client        # 프론트엔드만 실행
+npm run client:server # 클라이언트 서버 관리자만 실행 (포트 8083)
 ```
+
+**클라이언트 서버 관리자**는:
+- 초기 로드 시 config.json의 모든 모델을 확인하여 GGUF와 MLX 서버를 모두 시작
+- 모델 변경 시 서버를 재시작하지 않고 config만 저장 (프론트엔드가 자동으로 올바른 포트로 요청)
+- `config.json` 파일 변경을 감시하여 자동으로 서버 관리
 
 ### Run the client
 
@@ -232,8 +263,9 @@ npm run desktop
 
 ### Server configuration
 
+- `config.json`: client-side model configuration (active model, model list, settings)
 - `models-config.json`: server-side per-model load options (e.g., `contextSize`, `gpuLayers`, `modelFormat`)
-- `user_pw.json`: super-admin password hash file (gitignored)
+- `.auth.json`: super-admin password hash file (PBKDF2, gitignored)
 
 ### Model Directories
 
@@ -293,19 +325,28 @@ MLX 모델 디렉토리는 다음을 포함해야 합니다:
 
 ### Reset super-admin (delete account)
 
-To remove the test account and re-create it, stop the server and delete `user_pw.json`:
+To remove the super-admin account and re-create it, delete `.auth.json`:
 
 ```bash
-rm -f ./user_pw.json
-npm run server
+rm -f ./.auth.json
+# Restart authentication server (or restart the application)
 ```
+
+The authentication server runs independently on port 8082, so login/setup works even if model servers are down.
 
 ### Switching Between Model Formats
 
-When you change the model format (GGUF ↔ MLX) in the settings page, the server automatically:
-1. Stops the current server (llama.cpp or MLX)
-2. Starts the appropriate server for the selected format
-3. Loads the model from the correct directory (`llama.cpp/models/` or `mlx/models/`)
+**Dual Server Architecture**: Both GGUF and MLX servers run simultaneously on different ports (8080 and 8081).
+
+When you change the model in the dropdown:
+1. **No server restart required** - both servers are already running
+2. Frontend automatically selects the correct port based on model format:
+   - GGUF models → Port 8080
+   - MLX models → Port 8081
+3. All API calls (health check, chat, metrics) automatically use the correct endpoint
+4. `PerformancePanel` automatically reconnects to the correct metrics stream
+
+**Initial Load**: On first load or page refresh, `start-client-server.js` automatically starts both servers if models are configured.
 
 ### Environment variables
 

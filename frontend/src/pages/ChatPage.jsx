@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import { sendChatMessage, buildLlama3Prompt, countTokens, LLAMA_BASE_URL } from '../services/api';
+import { sendChatMessage, buildLlama3Prompt, countTokens, getActiveServerUrl } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import LogPanel from '../components/LogPanel';
 import ProgressBar from '../components/ProgressBar';
@@ -99,24 +99,58 @@ const ChatPage = () => {
     };
   }, []);
 
-  // 모델 로딩 상태 체크
+  // 모델 로딩 상태 체크 및 서버 자동 시작
   useEffect(() => {
+    let retryCount = 0;
+    const MAX_RETRIES = 3;
+    let hasRequestedStart = false;
+
     const checkServerStatus = async () => {
       try {
         // 라우터 모드 포함: /health 로 서버 기동 여부만 체크
-        const response = await fetch(`${LLAMA_BASE_URL}/health`, {
+        const serverUrl = getActiveServerUrl();
+        const response = await fetch(`${serverUrl}/health`, {
           method: 'GET',
           signal: AbortSignal.timeout(1000),
         });
-        setIsModelLoading(false);
+        if (response.ok) {
+          setIsModelLoading(false);
+          retryCount = 0; // 성공 시 리트라이 카운트 리셋
+          hasRequestedStart = false; // 성공 시 플래그 리셋
+          return;
+        }
       } catch (error) {
         // 서버가 아직 시작되지 않았거나 연결 불가
-        // 타임아웃이나 네트워크 에러는 조용히 처리 (로그 출력 안 함)
-        if (error.name !== 'AbortError' && !error.message.includes('Failed to fetch')) {
-          // 다른 에러만 로깅
+        if (error.name === 'AbortError' || error.message.includes('Failed to fetch') || error.message.includes('ERR_CONNECTION_REFUSED')) {
+          // 서버가 없는 경우, 클라이언트 모드에서 서버 시작 요청
+          if (!window.electronAPI && !hasRequestedStart && retryCount < MAX_RETRIES) {
+            retryCount++;
+            hasRequestedStart = true;
+            
+            try {
+              // 클라이언트 모드: 서버 시작 요청
+              const configStr = localStorage.getItem('llmServerClientConfig');
+              if (configStr) {
+                const config = JSON.parse(configStr);
+                if (config.activeModelId) {
+                  console.log('[ChatPage] Server not running, requesting server start for model:', config.activeModelId);
+                  // /api/save-config를 호출하여 서버 시작 트리거
+                  await fetch('http://localhost:8083/api/save-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: configStr,
+                    signal: AbortSignal.timeout(2000),
+                  }).catch(() => {
+                    // 실패해도 조용히 처리
+                  });
+                }
+              }
+            } catch (e) {
+              // 에러는 조용히 처리
+              console.log('[ChatPage] Failed to request server start:', e.message);
+            }
+          }
         }
-        // 에러가 발생해도 모델이 로딩 중일 수 있으므로 true로 설정하지 않음
-        // (이미 다른 곳에서 설정되었을 수 있음)
       }
     };
 
@@ -127,11 +161,11 @@ const ChatPage = () => {
 
     window.addEventListener('model-loading', handleModelLoading);
 
-    // 초기 체크
+    // 초기 체크 (즉시)
     checkServerStatus();
 
-    // 주기적으로 체크 (1초마다)
-    const interval = setInterval(checkServerStatus, 1000);
+    // 주기적으로 체크 (2초마다, 서버 시작 후에는 1초마다)
+    const interval = setInterval(checkServerStatus, 2000);
 
     return () => {
       window.removeEventListener('model-loading', handleModelLoading);

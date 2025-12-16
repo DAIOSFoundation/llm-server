@@ -201,10 +201,28 @@ const SettingsPage = () => {
     loadConfig();
   }, []);
 
-  const handleSelectModel = (modelId) => {
+  const handleSelectModel = async (modelId) => {
     setSelectedModelId(modelId);
     // 드롭다운/저장 기준 active 모델도 함께 갱신
-    setConfig(prev => ({ ...(prev || { models: [], activeModelId: null }), activeModelId: modelId }));
+    const newConfig = { ...(config || { models: [], activeModelId: null }), activeModelId: modelId };
+    setConfig(newConfig);
+    
+    // Electron 모드에서는 즉시 서버 전환
+    if (window.electronAPI) {
+      try {
+        await window.electronAPI.saveConfig(newConfig);
+      } catch (error) {
+        console.error('Failed to save config:', error);
+      }
+    } else {
+      // 클라이언트 모드에서는 localStorage에만 저장
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(newConfig));
+        window.dispatchEvent(new CustomEvent('client-config-updated', { detail: { config: newConfig } }));
+      } catch (_e) {
+        // ignore
+      }
+    }
   };
   
   const handleAddNewModel = () => {
@@ -279,6 +297,19 @@ const SettingsPage = () => {
       }
     } else {
       saveClientConfig(configToSave);
+      // 클라이언트 모드에서는 config.json 파일도 저장 (서버 시작용)
+      try {
+        const response = await fetch('http://localhost:8083/api/save-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(configToSave),
+        }).catch(() => {});
+        if (response && !response.ok) {
+          console.warn('Failed to save config.json file for server');
+        }
+      } catch (error) {
+        console.warn('Failed to save config.json file:', error);
+      }
       // Header 드롭다운이 즉시 갱신되도록 이벤트로 알림
       window.dispatchEvent(new CustomEvent('client-config-updated', { detail: { config: configToSave } }));
     }

@@ -1,5 +1,55 @@
 export const LLAMA_BASE_URL = import.meta.env.VITE_LLAMACPP_BASE_URL || 'http://localhost:8080';
 
+// 모델 형식에 따라 적절한 포트 선택
+export const getServerUrl = (modelFormat = 'gguf') => {
+  const baseUrl = LLAMA_BASE_URL.replace(':8080', '');
+  // GGUF: 8080, MLX: 8081
+  const port = modelFormat === 'mlx' ? 8081 : 8080;
+  return `${baseUrl}:${port}`;
+};
+
+// 현재 활성 모델의 형식을 가져와서 서버 URL 반환
+export const getActiveServerUrl = () => {
+  try {
+    // llmServerClientConfig를 먼저 확인 (여러 모델 관리용)
+    let config = null;
+    const clientConfigStr = localStorage.getItem('llmServerClientConfig');
+    if (clientConfigStr) {
+      try {
+        config = JSON.parse(clientConfigStr);
+        if (config && config.models && Array.isArray(config.models)) {
+          const activeModelId = config.activeModelId;
+          const activeModel = config.models.find(m => m.id === activeModelId);
+          if (activeModel) {
+            const modelFormat = activeModel.modelFormat || 'gguf';
+            return getServerUrl(modelFormat);
+          }
+        }
+      } catch (e) {
+        // 파싱 실패 시 무시
+      }
+    }
+    
+    // modelConfig 확인 (단일 모델 설정, 하위 호환성)
+    const modelConfigStr = localStorage.getItem('modelConfig');
+    if (modelConfigStr) {
+      try {
+        const modelConfig = JSON.parse(modelConfigStr);
+        if (modelConfig && modelConfig.modelFormat) {
+          return getServerUrl(modelConfig.modelFormat);
+        }
+      } catch (e) {
+        // 파싱 실패 시 무시
+      }
+    }
+    
+    // 기본값: GGUF 서버
+    return LLAMA_BASE_URL;
+  } catch (e) {
+    return LLAMA_BASE_URL; // 기본값
+  }
+};
+
 // Server Log 패널에 메시지를 보내기 위한 헬퍼
 const pushServerLog = (message, data) => {
   try {
@@ -141,7 +191,8 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
 
     // console.log('[API] Request Payload:', JSON.stringify(payload, null, 2)); // 디버그용 Payload 로그 추가
 
-    const response = await fetch(`${LLAMA_BASE_URL}/completion`, {
+    const serverUrl = getActiveServerUrl();
+    const response = await fetch(`${serverUrl}/completion`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -307,7 +358,8 @@ export const countTokens = async (prompt) => {
   try {
     const config = JSON.parse(localStorage.getItem('modelConfig')) || {};
     const model = (config.modelPath || '').trim();
-    const response = await fetch(`${LLAMA_BASE_URL}/tokenize`, {
+    const serverUrl = getActiveServerUrl();
+    const response = await fetch(`${serverUrl}/tokenize`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -348,7 +400,8 @@ export const tokenizeText = async (content) => {
   try {
     const config = JSON.parse(localStorage.getItem('modelConfig')) || {};
     const model = (config.modelPath || '').trim();
-    const response = await fetch(`${LLAMA_BASE_URL}/tokenize`, {
+    const serverUrl = getActiveServerUrl();
+    const response = await fetch(`${serverUrl}/tokenize`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

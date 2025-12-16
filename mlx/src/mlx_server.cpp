@@ -94,14 +94,16 @@ private:
     
     Napi::Value GenerateStream(const Napi::CallbackInfo& info);
     Napi::Value LoadModel(const Napi::CallbackInfo& info);
+    Napi::Value Tokenize(const Napi::CallbackInfo& info);
+    Napi::Value Decode(const Napi::CallbackInfo& info);
     
     void RunGeneration(const std::string& prompt, const std::map<std::string, double>& options);
     bool LoadModelFromPath(const std::string& modelPath);
     std::map<std::string, double> ParseOptions(const std::string& optionsJson);
     
     // MLX를 사용한 모델 로딩 및 추론 함수들
-    bool LoadSafetensors(const std::string& modelPath);
-    bool LoadGGUF(const std::string& modelPath);
+    bool LoadSafetensors(const std::string& modelDir);
+    bool LoadGGUF(const std::string& filePath);
     bool LoadTokenizer(const std::string& modelPath);
     std::vector<int> Tokenize(const std::string& text);
     std::string Decode(const std::vector<int>& tokens);
@@ -176,6 +178,8 @@ Napi::Object MlxInference::Init(Napi::Env env, Napi::Object exports) {
     Napi::Function func = DefineClass(env, "MlxInference", {
         InstanceMethod("generateStream", &MlxInference::GenerateStream),
         InstanceMethod("loadModel", &MlxInference::LoadModel),
+        InstanceMethod("tokenize", &MlxInference::Tokenize),
+        InstanceMethod("decode", &MlxInference::Decode),
     });
     
     constructor = Napi::Persistent(func);
@@ -224,27 +228,42 @@ bool MlxInference::LoadModelFromPath(const std::string& modelPath) {
         // safetensors 또는 GGUF 파일 찾기
         bool loaded = false;
         
-        DIR* dir = opendir(modelPath.c_str());
-        if (dir != nullptr) {
-            struct dirent* entry;
-            while ((entry = readdir(dir)) != nullptr) {
-                std::string filename = entry->d_name;
+        // 먼저 model.safetensors.index.json 확인 (여러 파일로 나뉜 모델)
+        std::string indexPath = modelPath + "/model.safetensors.index.json";
+        if (stat(indexPath.c_str(), &st) == 0) {
+            // 여러 safetensors 파일로 나뉜 모델
+            loaded = LoadSafetensors(modelPath);
+        } else {
+            // 단일 파일 모델 찾기
+            DIR* dir = opendir(modelPath.c_str());
+            if (dir != nullptr) {
+                struct dirent* entry;
+                std::vector<std::string> safetensorsFiles;
+                std::vector<std::string> ggufFiles;
                 
-                // safetensors 파일 찾기
-                if (filename.size() > 11 && filename.substr(filename.size() - 11) == ".safetensors") {
-                    std::string filePath = modelPath + "/" + filename;
-                    loaded = LoadSafetensors(filePath);
-                    if (loaded) break;
+                while ((entry = readdir(dir)) != nullptr) {
+                    std::string filename = entry->d_name;
+                    
+                    // safetensors 파일 찾기
+                    if (filename.size() > 11 && filename.substr(filename.size() - 11) == ".safetensors") {
+                        safetensorsFiles.push_back(modelPath + "/" + filename);
+                    }
+                    
+                    // GGUF 파일 찾기
+                    if (filename.size() > 5 && filename.substr(filename.size() - 5) == ".gguf") {
+                        ggufFiles.push_back(modelPath + "/" + filename);
+                    }
                 }
+                closedir(dir);
                 
-                // GGUF 파일 찾기
-                if (!loaded && filename.size() > 5 && filename.substr(filename.size() - 5) == ".gguf") {
-                    std::string filePath = modelPath + "/" + filename;
-                    loaded = LoadGGUF(filePath);
-                    if (loaded) break;
+                // safetensors 파일이 있으면 로드
+                if (!safetensorsFiles.empty()) {
+                    loaded = LoadSafetensors(modelPath);
+                } else if (!ggufFiles.empty()) {
+                    // 첫 번째 GGUF 파일 로드
+                    loaded = LoadGGUF(ggufFiles[0]);
                 }
             }
-            closedir(dir);
         }
         
         if (!loaded) {
@@ -268,17 +287,63 @@ bool MlxInference::LoadModelFromPath(const std::string& modelPath) {
     }
 }
 
-bool MlxInference::LoadSafetensors(const std::string& filePath) {
+bool MlxInference::LoadSafetensors(const std::string& modelDir) {
     try {
-        // MLX C++ API를 사용하여 safetensors 로드
-        auto result = mx::load_safetensors(filePath, model_->stream);
-        model_->weights = result.first;
-        model_->metadata = result.second;
+        // model.safetensors.index.json 확인
+        std::string indexPath = modelDir + "/model.safetensors.index.json";
+        struct stat indexStat;
         
-        // 메타데이터에서 하이퍼파라미터 추출
-        // 실제 구현에서는 config.json도 파싱해야 함
-        
-        return !model_->weights.empty();
+        if (stat(indexPath.c_str(), &indexStat) == 0) {
+            // 여러 파일로 나뉜 모델: index.json을 파싱하여 모든 파일 로드
+            // 간단한 구현: 모든 .safetensors 파일을 찾아서 로드
+            DIR* dir = opendir(modelDir.c_str());
+            if (dir == nullptr) {
+                return false;
+            }
+            
+            std::vector<std::string> safetensorsFiles;
+            struct dirent* entry;
+            while ((entry = readdir(dir)) != nullptr) {
+                std::string filename = entry->d_name;
+                if (filename.size() > 11 && filename.substr(filename.size() - 11) == ".safetensors") {
+                    safetensorsFiles.push_back(modelDir + "/" + filename);
+                }
+            }
+            closedir(dir);
+            
+            // 모든 safetensors 파일 로드
+            for (const auto& filePath : safetensorsFiles) {
+                try {
+                    auto result = mx::load_safetensors(filePath, model_->stream);
+                    // 가중치 병합
+                    for (const auto& [key, value] : result.first) {
+                        model_->weights.insert({key, value});
+                    }
+                    // 메타데이터 병합
+                    for (const auto& [key, value] : result.second) {
+                        model_->metadata[key] = value;
+                    }
+                } catch (const std::exception& e) {
+                    // 개별 파일 로드 실패는 무시하고 계속
+                    continue;
+                }
+            }
+            
+            return !model_->weights.empty();
+        } else {
+            // 단일 safetensors 파일 로드
+            std::string filePath = modelDir + "/model.safetensors";
+            struct stat fileStat;
+            if (stat(filePath.c_str(), &fileStat) != 0) {
+                return false;
+            }
+            
+            auto result = mx::load_safetensors(filePath, model_->stream);
+            model_->weights = result.first;
+            model_->metadata = result.second;
+            
+            return !model_->weights.empty();
+        }
     } catch (const std::exception& e) {
         return false;
     }
@@ -954,6 +1019,74 @@ void MlxInference::RunGeneration(const std::string& prompt, const std::map<std::
     }
     
     isRunning_ = false;
+}
+
+Napi::Value MlxInference::Tokenize(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    MlxInference* self = Napi::ObjectWrap<MlxInference>::Unwrap(info.This().As<Napi::Object>());
+    
+    if (info.Length() < 1 || !info[0].IsString()) {
+        Napi::TypeError::New(env, "Expected text string").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    
+    std::string text = info[0].As<Napi::String>().Utf8Value();
+    
+    std::lock_guard<std::mutex> lock(self->mutex_);
+    
+    if (!self->model_ || !self->model_->loaded) {
+        Napi::Error::New(env, "Model not loaded").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    
+    try {
+        std::vector<int> tokens = self->Tokenize(text);
+        
+        Napi::Array tokenArray = Napi::Array::New(env, tokens.size());
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            tokenArray[i] = Napi::Number::New(env, tokens[i]);
+        }
+        
+        return tokenArray;
+    } catch (const std::exception& e) {
+        Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+        return env.Null();
+    }
+}
+
+Napi::Value MlxInference::Decode(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    MlxInference* self = Napi::ObjectWrap<MlxInference>::Unwrap(info.This().As<Napi::Object>());
+    
+    if (info.Length() < 1 || !info[0].IsArray()) {
+        Napi::TypeError::New(env, "Expected tokens array").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    
+    Napi::Array tokenArray = info[0].As<Napi::Array>();
+    std::vector<int> tokens;
+    
+    for (uint32_t i = 0; i < tokenArray.Length(); ++i) {
+        Napi::Value val = tokenArray[i];
+        if (val.IsNumber()) {
+            tokens.push_back(val.As<Napi::Number>().Int32Value());
+        }
+    }
+    
+    std::lock_guard<std::mutex> lock(self->mutex_);
+    
+    if (!self->model_ || !self->model_->loaded) {
+        Napi::Error::New(env, "Model not loaded").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    
+    try {
+        std::string text = self->Decode(tokens);
+        return Napi::String::New(env, text);
+    } catch (const std::exception& e) {
+        Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+        return env.Null();
+    }
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {

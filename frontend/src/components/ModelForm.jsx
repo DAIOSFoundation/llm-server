@@ -245,45 +245,19 @@ const ModelForm = ({ config, onChange }) => {
           }
         } else {
           // 클라이언트 모드: 서버 API 호출
-          // 먼저 메인 서버(8080)에서 시도, 없으면 프록시 서버(8081)에서 시도
+          // MLX 검증 프록시 서버(8084)에서 시도
           try {
-            let res = null;
+            const proxyUrl = LLAMA_BASE_URL.replace(':8080', ':8084');
+            const res = await fetch(`${proxyUrl}/mlx-verify`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ model: modelId }),
+              signal: AbortSignal.timeout(5000),
+            });
+            
             let result = null;
-            
-            // 1. 메인 서버(MLX 서버 또는 llama.cpp 서버)에서 시도
-            try {
-              res = await fetch(`${LLAMA_BASE_URL}/mlx-verify`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: modelId }),
-                signal: AbortSignal.timeout(5000),
-              });
-              
-              if (res.ok) {
-                result = await res.json().catch(() => null);
-              }
-            } catch (e) {
-              // 메인 서버에서 실패하면 무시하고 프록시 서버 시도
-              console.log('[MLX Verify] Main server failed, trying proxy');
-            }
-            
-            // 2. 프록시 서버(8081)에서 시도 (메인 서버에 엔드포인트가 없는 경우)
-            if (!result || !res || !res.ok) {
-              try {
-                const proxyUrl = LLAMA_BASE_URL.replace(':8080', ':8081');
-                res = await fetch(`${proxyUrl}/mlx-verify`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ model: modelId }),
-                  signal: AbortSignal.timeout(5000),
-                });
-                
-                if (res.ok) {
-                  result = await res.json().catch(() => null);
-                }
-              } catch (e) {
-                console.error('[MLX Verify] Proxy server also failed:', e);
-              }
+            if (res.ok) {
+              result = await res.json().catch(() => null);
             }
             
             // 결과 처리
