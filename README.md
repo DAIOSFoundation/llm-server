@@ -332,9 +332,56 @@ This command builds:
 
 ## Run (Development)
 
-### Run the server
+### Quick Start
 
-#### GGUF Models (llama.cpp)
+The easiest way to run the entire project:
+
+```bash
+npm run client:all
+```
+
+This single command starts all required services:
+- **Client Server Manager** (port 8083): Automatically manages GGUF and MLX model servers
+- **Auth Server** (port 8082): Handles authentication (login/logout/setup)
+- **Frontend** (port 5173): React web UI
+
+After starting, open your browser and navigate to: **http://localhost:5173**
+
+The Client Server Manager will automatically start the GGUF server (port 8080) and MLX server (port 8081) based on your model configuration.
+
+### Detailed Run Options
+
+#### Client Mode (Recommended - Standalone Frontend)
+
+In client mode, `start-client-server.js` automatically manages both model servers (GGUF and MLX):
+
+```bash
+npm run client:all  # Run all services: frontend + client server manager + auth server
+```
+
+**What gets started:**
+- **Client Server Manager** (port 8083): Manages GGUF and MLX model servers
+- **Auth Server** (port 8082): Handles authentication (login/logout/setup)
+- **Frontend** (port 5173): React web UI
+
+**Individual service commands:**
+
+```bash
+npm run client        # Run frontend only (port 5173)
+npm run client:server # Run client server manager only (port 8083)
+npm run client:auth   # Run authentication server only (port 8082)
+```
+
+**Client Server Manager behavior:**
+- On initial load, checks all models in `config.json` and starts both GGUF and MLX servers
+- On model change, saves config only without restarting servers (frontend automatically requests correct port)
+- Monitors `config.json` file changes and automatically manages servers
+
+**Note**: When running `npm run client:all`, all three services (Client Server Manager, Auth Server, and Frontend) start together. The Auth Server is required for login functionality.
+
+#### GGUF Server Only (Manual)
+
+To run only the GGUF server manually:
 
 ```bash
 npm run server
@@ -347,39 +394,15 @@ Default options (root `package.json`):
 - `--models-dir "./llama.cpp/models"`
 - `--models-config "./models-config.json"`
 
-#### Client Mode (Standalone Frontend)
+#### Electron Mode (Optional)
 
-In client mode, `start-client-server.js` automatically manages both servers:
-
-```bash
-npm run client:all  # Run frontend + client server manager simultaneously
-```
-
-Or run individually:
-
-```bash
-npm run client        # Run frontend only
-npm run client:server # Run client server manager only (port 8083)
-```
-
-**Client Server Manager**:
-- On initial load, checks all models in config.json and starts both GGUF and MLX servers
-- On model change, saves config only without restarting servers (frontend automatically requests correct port)
-- Monitors `config.json` file changes and automatically manages servers
-
-### Run the client
-
-```bash
-npm run client
-```
-
-- Default URL: `http://localhost:5173/`
-
-### Electron (optional)
+For desktop application mode:
 
 ```bash
 npm run desktop
 ```
+
+This runs the Electron wrapper with the frontend bundled.
 
 ---
 

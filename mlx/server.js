@@ -24,6 +24,7 @@ class MlxServer {
     this.isModelLoaded = false;
     this.modelMeta = null;
     this.loadStartTime = null;
+    this.nativeServer = null; // C++ native 모듈 인스턴스
   }
 
   async loadModel() {
@@ -53,6 +54,23 @@ class MlxServer {
         architecture: config.architectures?.[0] || 'unknown',
         model_type: config.model_type || 'unknown',
       };
+
+      // C++ native 모듈 인스턴스 생성 및 모델 로드
+      if (MlxServerNative) {
+        try {
+          console.log(`[MLX] Creating C++ native module instance for model: ${this.modelPath}`);
+          this.nativeServer = new MlxServerNative(this.modelDir);
+          console.log(`[MLX] ✅ C++ native module instance created successfully`);
+        } catch (error) {
+          console.error(`[MLX] ❌ Failed to create native server instance:`, error);
+          console.error(`[MLX]    Error stack:`, error.stack);
+          // 모델 메타데이터는 로드했으므로 계속 진행하지만, nativeServer는 null로 남음
+          this.nativeServer = null;
+        }
+      } else {
+        console.error(`[MLX] ❌ MlxServerNative class is not available`);
+        this.nativeServer = null;
+      }
 
       this.isModelLoaded = true;
       console.log(`[MLX] Model metadata loaded: ${this.modelPath}`);
@@ -668,17 +686,16 @@ llamacpp:predicted_tokens_seconds 0
         console.log(`[MLX] Tokenizing content, length: ${content.length}`);
         
         // C++ native 모듈만 사용 (Python fallback 제거)
-        if (!MlxServerNative) {
+        if (!this.nativeServer) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'MLX C++ native module is not available' }));
+          res.end(JSON.stringify({ error: 'MLX C++ native module instance is not available. Model may not be loaded.' }));
           return;
         }
 
         try {
-          const nativeServer = new MlxServerNative(this.modelDir);
-          const tokens = nativeServer.inference.tokenize(content);
+          const tokens = this.nativeServer.tokenize(content);
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ tokens: Array.from(tokens) }));
+          res.end(JSON.stringify({ tokens: Array.isArray(tokens) ? tokens : Array.from(tokens) }));
         } catch (error) {
           console.error('[MLX] Native tokenize error:', error);
           res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -700,22 +717,32 @@ llamacpp:predicted_tokens_seconds 0
         const payload = JSON.parse(body);
         const { tokens } = payload;
         
+        if (!Array.isArray(tokens)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Tokens must be an array' }));
+          return;
+        }
+        
         // C++ native 모듈만 사용 (Python fallback 제거)
-        if (!MlxServerNative) {
+        if (!this.nativeServer) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'MLX C++ native module is not available' }));
+          res.end(JSON.stringify({ error: 'MLX C++ native module instance is not available. Model may not be loaded.' }));
           return;
         }
 
-        const nativeServer = new MlxServerNative(this.modelDir);
-        const content = nativeServer.inference.decode(tokens);
-        
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ content }));
+        try {
+          const content = this.nativeServer.detokenize(tokens);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ content }));
+        } catch (error) {
+          console.error('[MLX] Native detokenize error:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Detokenization failed: ${error.message}` }));
+        }
       } catch (error) {
-        console.error('[MLX] Native detokenize error:', error);
+        console.error('[MLX] Detokenize error:', error);
         res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: `Detokenization failed: ${error.message}` }));
+        res.end(JSON.stringify({ error: error.message }));
       }
     });
   }
@@ -998,8 +1025,8 @@ llamacpp:predicted_tokens_seconds 0
 
   async streamCompletion(prompt, options, res) {
     // C++ native 모듈만 사용 (Python fallback 제거)
-    if (!MlxServerNative) {
-      const errorMsg = 'MLX C++ native module is not available. Please build it with: cd mlx && npm run build';
+    if (!this.nativeServer) {
+      const errorMsg = 'MLX C++ native module instance is not available. Model may not be loaded.';
       console.error(`[MLX] ${errorMsg}`);
       if (!res.writableEnded) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -1009,31 +1036,29 @@ llamacpp:predicted_tokens_seconds 0
     }
 
     try {
-      const nativeServer = new MlxServerNative(this.modelDir);
-      
-      await nativeServer.generateStream(
+      await this.nativeServer.generateStream(
         prompt,
         {
-          temperature: options.temperature,
-          topK: options.top_k,
-          topP: options.top_p,
-          minP: options.min_p,
-          typicalP: options.typical_p,
-          tfsZ: options.tfs_z,
-          repeatPenalty: options.repeat_penalty,
-          repeatLastN: options.repeat_last_n,
-          presencePenalty: options.presence_penalty,
-          frequencyPenalty: options.frequency_penalty,
-          dryMultiplier: options.dry_multiplier,
-          dryBase: options.dry_base,
-          dryAllowedLength: options.dry_allowed_length,
-          dryPenaltyLastN: options.dry_penalty_last_n,
-          mirostat: options.mirostat,
-          mirostatTau: options.mirostat_tau,
-          mirostatEta: options.mirostat_eta,
-          maxTokens: options.max_tokens,
+          temperature: options.temperature || 0.7,
+          topK: options.top_k || 40,
+          topP: options.top_p || 0.95,
+          minP: options.min_p || 0.05,
+          typicalP: options.typical_p || 1.0,
+          tfsZ: options.tfs_z || 1.0,
+          repeatPenalty: options.repeat_penalty || 1.2,
+          repeatLastN: options.repeat_last_n || 128,
+          presencePenalty: options.presence_penalty || 0.0,
+          frequencyPenalty: options.frequency_penalty || 0.0,
+          dryMultiplier: options.dry_multiplier || 0.0,
+          dryBase: options.dry_base || 1.75,
+          dryAllowedLength: options.dry_allowed_length || 2,
+          dryPenaltyLastN: options.dry_penalty_last_n || -1,
+          mirostat: options.mirostat || 0,
+          mirostatTau: options.mirostat_tau || 5.0,
+          mirostatEta: options.mirostat_eta || 0.1,
+          maxTokens: options.max_tokens || 600,
           stop: options.stop || [],
-          seed: options.seed,
+          seed: options.seed || -1,
         },
         (data) => {
           if (!res.writableEnded) {

@@ -85,6 +85,20 @@ class MlxServerNative {
       this.inference.createInferenceScript();
     }
   }
+
+  tokenize(content) {
+    if (!this.inference.tokenize) {
+      throw new Error('Tokenize method not available in native module');
+    }
+    return this.inference.tokenize(content);
+  }
+
+  detokenize(tokens) {
+    if (!this.inference.decode) {
+      throw new Error('Decode method not available in native module');
+    }
+    return this.inference.decode(tokens);
+  }
 }
 
 module.exports = MlxServerNative;
