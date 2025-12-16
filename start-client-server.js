@@ -447,11 +447,21 @@ const httpServer = http.createServer((req, res) => {
         console.log('[Client Server][DEBUG] Config file written, calling watchConfigAndStartServer...');
         console.log('[Client Server] 🔄 Triggering server restart...');
         
-        // config만 저장하고 서버는 재시작하지 않음 (이미 실행 중인 서버 사용)
-        console.log('[Client Server][DEBUG] Config saved, servers should already be running');
+        // config 저장 후 서버 시작
+        console.log('[Client Server][DEBUG] Config saved, checking if servers need to be started...');
         console.log('[Client Server][DEBUG]   Active model ID:', config.activeModelId);
         console.log('[Client Server][DEBUG]   GGUF server running:', !!llamaServerProcess);
         console.log('[Client Server][DEBUG]   MLX server running:', !!mlxServerInstance);
+        
+        // 서버가 없으면 시작
+        if (config.models && config.models.length > 0) {
+          console.log('[Client Server] 🚀 Starting servers from saved config...');
+          startAllServers(config).then(() => {
+            console.log('[Client Server] ✅ Servers started');
+          }).catch(err => {
+            console.error('[Client Server] ❌ Error starting servers:', err);
+          });
+        }
         
         console.log('[Client Server][DEBUG] Server start requested, sending response...');
         res.writeHead(200, { 'Content-Type': 'application/json' });

@@ -10,26 +10,130 @@ This project serves LLMs via **`llama.cpp`'s `llama-server`** (GGUF format) and 
 
 ---
 
-## Structure
+## Project Structure
+
+### Architecture Overview
+
+This project consists of **4 independent servers** and a **frontend client**:
+
+1. **GGUF Server** (Port 8080): Uses `llama.cpp`'s `llama-server` to serve GGUF format models
+2. **MLX Server** (Port 8081): Uses MLX C++ API to serve MLX format models
+3. **Authentication Server** (Port 8082): Handles login/logout/setup independently (runs independently from model servers)
+4. **Client Server Manager** (Port 8083): Automatically manages model servers in client-only mode
+5. **Frontend** (Port 5173): React + Vite based web UI
+
+### Directory Structure
 
 ```text
 llm-server/
-├─ frontend/                 # React (Vite) client
-├─ llama.cpp/                # llama.cpp (Git submodule)
-├─ mlx/                      # MLX server (C++ native module)
-│  ├─ src/mlx_server.cpp    # MLX C++ API implementation
-│  ├─ server.js              # MLX HTTP server
-│  ├─ native.js              # Node.js wrapper
-│  └─ models/                # MLX model directory
-├─ native/                   # Metal VRAM monitor (native module)
-├─ auth-server.js            # Authentication server (port 8082)
-├─ start-client-server.js    # Client server manager (port 8083)
-├─ config.json               # Client-side model configuration
-├─ models-config.json        # (server) per-model load options (router)
-├─ .auth.json                # Super-admin password hash file (PBKDF2, gitignore)
-├─ main.js / preload.js      # (optional) Electron wrapper
-└─ package.json              # run/build scripts
+├─ frontend/                      # React (Vite) client
+│  ├─ src/
+│  │  ├─ components/              # React components
+│  │  ├─ pages/                   # Page components
+│  │  ├─ contexts/                # React Context (Auth, etc.)
+│  │  └─ services/                # API service layer
+│  └─ package.json
+│
+├─ llama.cpp/                     # llama.cpp (Git submodule)
+│  └─ build/bin/llama-server      # GGUF server executable
+│
+├─ mlx/                           # MLX server (C++ native module)
+│  ├─ src/
+│  │  └─ mlx_server.cpp          # MLX C++ API implementation (tokenization, inference)
+│  ├─ server.js                   # MLX HTTP server (port 8081)
+│  ├─ native.js                   # Node.js wrapper
+│  ├─ binding.gyp                 # node-gyp build configuration
+│  └─ models/                     # MLX model directory
+│
+├─ native/                        # Metal VRAM monitoring native module
+│  ├─ src/
+│  │  └─ vram_monitor.cpp         # macOS Metal VRAM monitoring
+│  └─ binding.gyp                 # node-gyp build configuration
+│
+├─ auth-server.js                 # Authentication server (port 8082)
+├─ start-client-server.js          # Client server manager (port 8083)
+├─ mlx-verify-proxy.js            # MLX model verification proxy (port 8084)
+│
+├─ config.json                     # Client model configuration (localStorage sync)
+├─ models-config.json              # Server-side model load options (router mode)
+├─ .auth.json                      # Super admin password hash (PBKDF2, gitignore)
+│
+├─ main.js / preload.js            # (Optional) Electron wrapper
+└─ package.json                    # Run/build scripts
 ```
+
+### Server Components
+
+#### 1. GGUF Server (Port 8080)
+- **Executable**: `llama.cpp/build/bin/llama-server`
+- **Native Library**: `llama.cpp` (C++ implementation)
+- **Functionality**: GGUF format model loading and inference
+- **Startup**: Auto-started by `start-client-server.js` or manually executed
+
+#### 2. MLX Server (Port 8081)
+- **Server File**: `mlx/server.js`
+- **Native Module**: `mlx/src/mlx_server.cpp` (uses MLX C++ API)
+- **Native Library**: MLX C++ library (`/opt/homebrew/lib/libmlx*.dylib`)
+- **Functionality**: MLX format model loading and inference, BPE tokenization
+- **Startup**: Auto-started by `start-client-server.js` or manually executed
+
+#### 3. Authentication Server (Port 8082)
+- **Server File**: `auth-server.js`
+- **Functionality**: User authentication (login/logout/setup), super admin account management
+- **Independence**: Runs independently from model servers (login works even if model servers are down)
+
+#### 4. Client Server Manager (Port 8083)
+- **Server File**: `start-client-server.js`
+- **Role**: Central manager that automatically manages model servers in client-only mode (running frontend only in browser)
+- **Key Features**:
+  1. **Automatic Server Startup/Management**
+     - Reads `config.json` on initial load and automatically starts both GGUF and MLX servers
+     - Monitors `config.json` file changes (fs.watchFile)
+     - Starts appropriate server based on model format (GGUF → port 8080, MLX → port 8081)
+  
+  2. **Frontend Configuration Synchronization**
+     - Handles model configuration save requests from frontend via `/api/save-config` endpoint
+     - Saves received configuration to `config.json` file
+     - Automatically starts servers if needed after saving configuration
+  
+  3. **Server Process Management**
+     - GGUF Server: Spawns and manages `llama.cpp/build/bin/llama-server` process
+     - MLX Server: Spawns and manages `mlx/server.js` Node.js process
+     - Handles server process termination and restart
+  
+  4. **Client Mode Support**
+     - Required when running frontend only in browser without Electron
+     - Frontend cannot directly start servers, so a separate Node.js process manages servers
+     - Acts as a bridge between frontend and servers
+  
+- **Use Cases**:
+  - Development: Auto-starts with frontend when running `npm run client:all`
+  - Production: Run as a separate process to allow frontend to control servers
+
+#### 5. Frontend (Port 5173)
+- **Framework**: React + Vite
+- **Functionality**: 
+  - Model configuration and management UI
+  - Chat interface
+  - Real-time performance monitoring
+  - Server log streaming
+
+### Native Modules
+
+#### llama.cpp
+- **Location**: `llama.cpp/` (Git submodule)
+- **Purpose**: GGUF model loading and inference
+- **Build**: Uses CMake to generate `llama-server` executable
+
+#### MLX C++ Library
+- **Installation Location**: `/opt/homebrew/include/mlx`, `/opt/homebrew/lib/libmlx*.dylib`
+- **Purpose**: MLX model loading and inference (Apple Silicon optimized)
+- **Integration**: Directly used in `mlx/src/mlx_server.cpp`
+
+#### Native VRAM Monitor
+- **Location**: `native/src/vram_monitor.cpp`
+- **Purpose**: macOS Metal VRAM usage monitoring
+- **Build**: Uses `node-gyp` to build as Node.js native module
 
 ---
 
@@ -76,10 +180,27 @@ llm-server/
 
 The application uses a **multi-server architecture** with separate ports for different services:
 
-- **GGUF Server** (Port 8080): `llama.cpp`'s `llama-server` for GGUF models
-- **MLX Server** (Port 8081): MLX C++ API server for MLX models
-- **Authentication Server** (Port 8082): Handles login/logout/setup independently
-- **Client Server Manager** (Port 8083): Manages model servers in client-only mode
+### Default Ports
+
+- **GGUF Server**: Port **8080** (default)
+  - Uses `llama.cpp`'s `llama-server` for GGUF models
+  - Started via `start-client-server.js` with `--port 8080` flag
+- **MLX Server**: Port **8081** (default)
+  - Uses MLX C++ API server for MLX models
+  - Configured in `mlx/server.js` (`this.port = 8081`)
+- **Authentication Server**: Port **8082** (default)
+  - Handles login/logout/setup independently
+  - Runs even when model servers are down
+- **Client Server Manager**: Port **8083** (default)
+  - Manages model servers in client-only mode
+  - Receives config updates from frontend via `/api/save-config`
+
+### Port Configuration
+
+- **GGUF Server Port**: Can be changed via `LLAMA_PORT` environment variable (default: 8080)
+- **MLX Server Port**: Hardcoded in `mlx/server.js` (default: 8081)
+- **Authentication Server Port**: Hardcoded in `auth-server.js` (default: 8082)
+- **Client Server Manager Port**: Hardcoded in `start-client-server.js` (default: 8083)
 
 Both GGUF and MLX servers run **simultaneously**. The frontend automatically selects the correct port based on the selected model's format.
 
@@ -121,7 +242,16 @@ Both GGUF and MLX servers run **simultaneously**. The frontend automatically sel
 
 ### Client Server Manager - Port 8083
 
-- **Save Config**: `POST /api/save-config` (save model configuration, triggers server management)
+- **Save Config**: `POST /api/save-config`
+  - Model configuration save request from frontend
+  - Request body: `{ models: [...], activeModelId: "..." }`
+  - Action: Saves to `config.json` file and automatically starts servers if needed
+  - Response: `{ success: true }`
+
+**Client Server Manager Role**:
+- Automatically manages model servers in client-only mode (running frontend only in browser)
+- Acts as a bridge between frontend and servers, allowing frontend to control servers without Electron
+- Monitors `config.json` file and automatically starts/manages servers when model configuration changes
 
 ---
 
@@ -170,16 +300,16 @@ cd ../..
 
 ### 3) Build MLX C++ Library (for MLX models)
 
-MLX C++ 라이브러리를 설치해야 합니다:
+The MLX C++ library must be installed:
 
 ```bash
-# MLX C++ 라이브러리 소스에서 빌드 및 설치
+# Build and install MLX C++ library from source
 git clone https://github.com/ml-explore/mlx.git /tmp/mlx-build
 cd /tmp/mlx-build
 mkdir build && cd build
 cmake ..
 make -j8
-# 헤더 파일과 라이브러리 수동 설치
+# Manually install headers and libraries
 sudo mkdir -p /opt/homebrew/include/mlx
 sudo mkdir -p /opt/homebrew/lib
 sudo cp -r ../mlx/*.h /opt/homebrew/include/mlx/
@@ -194,7 +324,7 @@ sudo cp build/libmlx*.dylib /opt/homebrew/lib/
 npm run build:native
 ```
 
-이 명령은 다음을 빌드합니다:
+This command builds:
 - `native/`: Metal VRAM monitor (macOS)
 - `mlx/`: MLX C++ native module
 
@@ -219,23 +349,23 @@ Default options (root `package.json`):
 
 #### Client Mode (Standalone Frontend)
 
-클라이언트 모드에서는 `start-client-server.js`가 자동으로 두 서버를 관리합니다:
+In client mode, `start-client-server.js` automatically manages both servers:
 
 ```bash
-npm run client:all  # 프론트엔드 + 클라이언트 서버 관리자 동시 실행
+npm run client:all  # Run frontend + client server manager simultaneously
 ```
 
-또는 개별 실행:
+Or run individually:
 
 ```bash
-npm run client        # 프론트엔드만 실행
-npm run client:server # 클라이언트 서버 관리자만 실행 (포트 8083)
+npm run client        # Run frontend only
+npm run client:server # Run client server manager only (port 8083)
 ```
 
-**클라이언트 서버 관리자**는:
-- 초기 로드 시 config.json의 모든 모델을 확인하여 GGUF와 MLX 서버를 모두 시작
-- 모델 변경 시 서버를 재시작하지 않고 config만 저장 (프론트엔드가 자동으로 올바른 포트로 요청)
-- `config.json` 파일 변경을 감시하여 자동으로 서버 관리
+**Client Server Manager**:
+- On initial load, checks all models in config.json and starts both GGUF and MLX servers
+- On model change, saves config only without restarting servers (frontend automatically requests correct port)
+- Monitors `config.json` file changes and automatically manages servers
 
 ### Run the client
 
@@ -292,24 +422,24 @@ npm run build
 
 ### MLX C++ API Integration
 
-MLX 서버는 Apple의 MLX C++ 공식 라이브러리를 직접 사용합니다:
+The MLX server directly uses Apple's official MLX C++ library:
 
-- **모델 로딩**: `mlx::core::load_safetensors()` 또는 `mlx::core::load_gguf()` 사용
-- **Transformer 구현**: llama.cpp의 ggml-metal 구현을 참고하여 MLX C++ API로 구현
+- **Model Loading**: Uses `mlx::core::load_safetensors()` or `mlx::core::load_gguf()`
+- **Transformer Implementation**: Implemented using MLX C++ API, referencing llama.cpp's ggml-metal implementation
   - Multi-Head Attention
   - Feed Forward Network
   - Layer Normalization
-- **토큰화**: llama.cpp의 BPE 토큰화 알고리즘을 참고하여 구현
-- **샘플링**: Temperature, Top-K, Top-P, Min-P 지원
-- **스트리밍**: 비동기 토큰 생성 및 SSE 스트리밍
+- **Tokenization**: Implemented referencing llama.cpp's BPE tokenization algorithm
+- **Sampling**: Supports Temperature, Top-K, Top-P, Min-P
+- **Streaming**: Async token generation and SSE streaming
 
 ### MLX Model Requirements
 
-MLX 모델 디렉토리는 다음을 포함해야 합니다:
+MLX model directory must contain:
 
-- `config.json`: 모델 설정 파일
-- `model.safetensors` 또는 `*.gguf`: 모델 가중치 파일
-- `tokenizer.json`: 토큰화 설정 (선택사항)
+- `config.json`: Model configuration file
+- `model.safetensors` or `*.gguf`: Model weight files
+- `tokenizer.json`: Tokenization configuration (optional)
 
 ### MLX vs GGUF
 
@@ -347,6 +477,18 @@ When you change the model in the dropdown:
 4. `PerformancePanel` automatically reconnects to the correct metrics stream
 
 **Initial Load**: On first load or page refresh, `start-client-server.js` automatically starts both servers if models are configured.
+
+**Client Server Manager Workflow**:
+
+1. **Frontend Start** → Browser accesses `http://localhost:5173`
+2. **Config Load** → Frontend loads config from `localStorage` or calls `/api/save-config`
+3. **Automatic Server Start** → Client Server Manager reads `config.json` and starts required servers
+   - If GGUF model exists → Start GGUF server on port 8080
+   - If MLX model exists → Start MLX server on port 8081
+4. **Model Switch** → Frontend calls `/api/save-config` when model is selected
+5. **Automatic Port Selection** → Frontend automatically requests API to correct port based on selected model format
+   - GGUF model selected → Use `http://localhost:8080`
+   - MLX model selected → Use `http://localhost:8081`
 
 ### Environment variables
 
