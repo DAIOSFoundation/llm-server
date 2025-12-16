@@ -16,4 +16,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Read GGUF metadata (quantization, tensor types, etc.)
   getGgufInfo: (modelPath) => ipcRenderer.invoke('get-gguf-info', modelPath),
+  
+  // Verify MLX model exists
+  verifyMlxModel: (modelId) => ipcRenderer.invoke('verify-mlx-model', modelId),
 });

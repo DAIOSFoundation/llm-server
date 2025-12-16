@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import ModelForm from '../components/ModelForm';
 import { useLanguage } from '../contexts/LanguageContext';
 import './SettingsPage.css';
@@ -211,6 +212,7 @@ const SettingsPage = () => {
       id: `model_${Date.now()}`,
       name: 'New Model',
       modelPath: '',
+      modelFormat: 'gguf',
       accelerator: 'auto',
       gpuLayers: -1,
       contextSize: 2048,
@@ -360,59 +362,68 @@ const SettingsPage = () => {
 
   return (
     <div className="settings-page-layout">
-      <div className="model-list-panel">
-        <h3>{t('settings.modelList')}</h3>
-        <div className="model-list">
-          {models.map(model => (
-            <div 
-              key={model.id} 
-              className={`model-list-item ${selectedModelId === model.id ? 'active' : ''}`}
-              onClick={() => handleSelectModel(model.id)}
-            >
-              <span className="model-name">{getModelLabel(model) || '-'}</span>
-              <button onClick={(e) => { e.stopPropagation(); handleDeleteModel(model.id); }} className="delete-button">
-                {t('settings.deleteModel')}
+      <div className="settings-page-content">
+        <PanelGroup direction="horizontal" className="settings-panel-group">
+          <Panel defaultSize={30} minSize={15} maxSize={60}>
+            <div className="model-list-panel">
+              <h3>{t('settings.modelList')}</h3>
+              <div className="model-list">
+                {models.map(model => (
+                  <div 
+                    key={model.id} 
+                    className={`model-list-item ${selectedModelId === model.id ? 'active' : ''}`}
+                    onClick={() => handleSelectModel(model.id)}
+                  >
+                    <span className="model-name">{getModelLabel(model) || '-'}</span>
+                    <button onClick={(e) => { e.stopPropagation(); handleDeleteModel(model.id); }} className="delete-button">
+                      {t('settings.deleteModel')}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button onClick={handleAddNewModel} className="add-new-button">
+                {t('settings.addNewModel')}
               </button>
             </div>
-          ))}
-        </div>
-        <button onClick={handleAddNewModel} className="add-new-button">
-          {t('settings.addNewModel')}
-        </button>
-      </div>
-      <div className="model-form-panel">
-        {selectedModel ? (
-          <ModelForm
-            key={selectedModel.id}
-            config={selectedModel}
-            onChange={handleModelFormChange}
-          />
-        ) : (
-          <div className="no-model-selected">
-            <p>{t('settings.noModelSelected')}</p>
-          </div>
-        )}
-        
-        <div className="descriptions-section">
-          <h3 
-            className="descriptions-header"
-            onClick={() => setIsDescriptionsExpanded(!isDescriptionsExpanded)}
-          >
-            <span>{t('descriptions.title')}</span>
-            <span className={`expand-icon ${isDescriptionsExpanded ? 'expanded' : ''}`}>▼</span>
-          </h3>
-          {isDescriptionsExpanded && (
-            <div className="descriptions-grid">
-              {descriptionKeys.map(key => (
-                <DescriptionCard 
-                  key={key}
-                  title={t(`settings.${key}`)} 
-                  content={t(`descriptions.${key}`)} 
+          </Panel>
+          <PanelResizeHandle className="resizable-panel-handle" />
+          <Panel minSize={30}>
+            <div className="model-form-panel">
+              {selectedModel ? (
+                <ModelForm
+                  key={selectedModel.id}
+                  config={selectedModel}
+                  onChange={handleModelFormChange}
                 />
-              ))}
+              ) : (
+                <div className="no-model-selected">
+                  <p>{t('settings.noModelSelected')}</p>
+                </div>
+              )}
+              
+              <div className="descriptions-section">
+                <h3 
+                  className="descriptions-header"
+                  onClick={() => setIsDescriptionsExpanded(!isDescriptionsExpanded)}
+                >
+                  <span>{t('descriptions.title')}</span>
+                  <span className={`expand-icon ${isDescriptionsExpanded ? 'expanded' : ''}`}>▼</span>
+                </h3>
+                {isDescriptionsExpanded && (
+                  <div className="descriptions-grid">
+                    {descriptionKeys.map(key => (
+                      <DescriptionCard 
+                        key={key}
+                        title={t(`settings.${key}`)} 
+                        content={t(`descriptions.${key}`)} 
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-          )}
-        </div>
+          </Panel>
+        </PanelGroup>
       </div>
       <div className="settings-footer">
         <button onClick={handleClose} className="footer-button close-button">{t('settings.close')}</button>

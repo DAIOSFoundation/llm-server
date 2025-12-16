@@ -8,10 +8,12 @@ const { promisify } = require('util');
 
 const configPath = path.join(app.getPath('userData'), 'config.json');
 let llamaServerProcess = null;
+let mlxServerInstance = null; // MLX 서버 인스턴스
 let mainWindow = null;
 let cachedVramTotal = 0; // VRAM 용량 캐싱
 let cachedVramUsed = 0; // VRAM 사용량 (바이트) - 0으로 초기화
 let currentModelConfig = null; // 현재 로드된 모델 설정
+let currentServerType = null; // 현재 실행 중인 서버 타입: 'gguf' 또는 'mlx'
 let lastVramUpdateTime = 0; // 마지막 VRAM 업데이트 시간 (디버깅용)
 
 // ----------------------------
@@ -367,14 +369,130 @@ function initializeConfig() {
   }
 }
 
-function startLlamaServer(modelConfig) {
+function stopCurrentServer() {
+  // 현재 실행 중인 서버 종료
   if (llamaServerProcess) {
-    llamaServerProcess.kill();
+    console.log(`[Server] Stopping ${currentServerType || 'current'} server`);
+    try {
+      if (currentServerType === 'mlx' && mlxServerInstance) {
+        // MLX 서버 종료
+        console.log(`[Server] Stopping MLX server instance`);
+        mlxServerInstance.stop();
+        mlxServerInstance = null;
+      } else if (currentServerType === 'gguf') {
+        // llama.cpp 서버 종료
+        console.log(`[Server] Killing llama.cpp server process`);
+        llamaServerProcess.kill('SIGTERM');
+        // 프로세스가 종료될 때까지 잠시 대기
+        setTimeout(() => {
+          if (llamaServerProcess && !llamaServerProcess.killed) {
+            console.log(`[Server] Force killing llama.cpp server process`);
+            llamaServerProcess.kill('SIGKILL');
+          }
+        }, 1000);
+      } else {
+        // 알 수 없는 타입이지만 프로세스가 있으면 종료 시도
+        console.log(`[Server] Attempting to kill unknown server type`);
+        if (typeof llamaServerProcess.kill === 'function') {
+          llamaServerProcess.kill('SIGTERM');
+        }
+      }
+    } catch (error) {
+      console.error(`[Server] Error stopping server:`, error);
+    }
+    
+    // 상태 초기화는 즉시 수행하지 않고, 프로세스 종료 이벤트에서 처리
+    // (gguf 서버의 경우 on('close') 이벤트에서 처리됨)
+    if (currentServerType === 'mlx') {
+      // MLX 서버는 즉시 초기화
+      llamaServerProcess = null;
+      currentModelConfig = null;
+      currentServerType = null;
+      cachedVramUsed = 0;
+    }
+  } else {
+    console.log(`[Server] No server process to stop`);
+  }
+}
+
+function startLlamaServer(modelConfig) {
+  if (!modelConfig) {
+    console.error('[Server] No model config provided');
+    return;
+  }
+
+  const { modelFormat, modelPath, id } = modelConfig;
+  console.log(`[Server] ===== Starting server =====`);
+  console.log(`[Server] Model ID: ${id}`);
+  console.log(`[Server] Model path: ${modelPath}`);
+  console.log(`[Server] Model format: ${modelFormat}`);
+  console.log(`[Server] Current server type: ${currentServerType}`);
+  console.log(`[Server] Current process exists: ${!!llamaServerProcess}`);
+  console.log(`[Server] Current model config: ${currentModelConfig?.id || 'none'}`);
+
+  // 현재 모델과 동일한 모델이면 재시작하지 않음
+  if (currentModelConfig && currentModelConfig.id === id && currentServerType === modelFormat) {
+    console.log(`[Server] Same model and format already running, skipping restart`);
+    return;
+  }
+
+  // 현재 서버가 실행 중이면 종료
+  if (llamaServerProcess) {
+    const needsFormatChange = currentServerType !== modelFormat;
+    const needsModelChange = currentModelConfig?.id !== id;
+    
+    console.log(`[Server] Stopping current server:`);
+    console.log(`[Server]   - Format change needed: ${needsFormatChange}`);
+    console.log(`[Server]   - Model change needed: ${needsModelChange}`);
+    console.log(`[Server]   - Current: ${currentServerType}/${currentModelConfig?.id || 'none'}`);
+    console.log(`[Server]   - New: ${modelFormat}/${id}`);
+    
+    // 형식이 다르거나 같은 형식이어도 재시작 필요
+    stopCurrentServer();
+    
+    // 서버 종료 대기 후 새 서버 시작 (비동기 처리)
+    setTimeout(() => {
+      console.log(`[Server] Starting new server after stop delay`);
+      startServerByFormat(modelConfig);
+    }, 1000); // 500ms -> 1000ms로 증가하여 서버 종료 시간 확보
+    return;
+  }
+
+  // 서버가 없으면 바로 시작
+  console.log(`[Server] No current server, starting immediately`);
+  startServerByFormat(modelConfig);
+}
+
+function startServerByFormat(modelConfig) {
+  if (!modelConfig) {
+    console.error('[Server] No model config provided to startServerByFormat');
+    return;
+  }
+
+  const { modelFormat } = modelConfig;
+  console.log(`[Server] Starting server by format: ${modelFormat}`);
+
+  // 모델 형식에 따라 다른 서버 시작
+  if (modelFormat === 'mlx') {
+    startMlxServer(modelConfig);
+  } else {
+    // 기본값은 GGUF
+    startGgufServer(modelConfig);
+  }
+}
+
+function startGgufServer(modelConfig) {
+  if (!modelConfig) {
+    console.error('[Server] No model config provided to startGgufServer');
+    return;
   }
 
   currentModelConfig = modelConfig; // 현재 모델 설정 저장
   const { modelPath, contextSize, gpuLayers, frequencyPenalty, presencePenalty } = modelConfig;
+  
+  console.log(`[Server] Starting GGUF server for model: ${modelPath}`);
 
+  // GGUF 모델 처리 (기존 로직)
   if (!modelPath || !fs.existsSync(modelPath)) {
     const msg = `Model path "${modelPath}" is invalid. Server not started.`;
     console.log(msg);
@@ -421,10 +539,58 @@ function startLlamaServer(modelConfig) {
     const msg = `llama-server process exited with code ${code}`;
     console.log(msg);
     sendLog('log-message', `[INFO] ${msg}`);
-    llamaServerProcess = null;
-    currentModelConfig = null; // 모델 설정 초기화
-    cachedVramUsed = 0; // VRAM 사용량 초기화
+    if (currentServerType === 'gguf') {
+      llamaServerProcess = null;
+      currentModelConfig = null; // 모델 설정 초기화
+      currentServerType = null;
+      cachedVramUsed = 0; // VRAM 사용량 초기화
+    }
   });
+
+  currentServerType = 'gguf';
+  const msg = `[INFO] GGUF server started for model: ${modelPath}`;
+  console.log(msg);
+  sendLog('log-message', msg);
+}
+
+async function startMlxServer(modelConfig) {
+  const MlxServer = require(path.join(__dirname, 'mlx', 'server'));
+  
+  try {
+    currentModelConfig = modelConfig; // 현재 모델 설정 저장
+    
+    const mlxServer = new MlxServer(modelConfig);
+    await mlxServer.start();
+    
+    // MLX 서버 인스턴스 저장
+    mlxServerInstance = mlxServer;
+    
+    // 서버 프로세스로 저장 (나중에 종료할 수 있도록)
+    llamaServerProcess = {
+      kill: () => {
+        if (mlxServerInstance) {
+          mlxServerInstance.stop();
+          mlxServerInstance = null;
+        }
+        llamaServerProcess = null;
+        currentModelConfig = null;
+        currentServerType = null;
+        cachedVramUsed = 0;
+      }
+    };
+    
+    currentServerType = 'mlx';
+    const msg = `[INFO] MLX server started for model: ${modelConfig.modelPath}`;
+    console.log(msg);
+    sendLog('log-message', msg);
+  } catch (error) {
+    const msg = `[ERROR] Failed to start MLX server: ${error.message}`;
+    console.error(msg);
+    sendLog('log-message', msg);
+    dialog.showErrorBox('MLX Server Error', msg);
+    currentServerType = null;
+    currentModelConfig = null;
+  }
 }
 
 app.whenReady().then(() => {
@@ -438,6 +604,7 @@ app.whenReady().then(() => {
       if (config.activeModelId) {
         const activeModel = config.models.find(m => m.id === config.activeModelId);
         if (activeModel) {
+          // 모델 형식에 따라 서버 시작
           startLlamaServer(activeModel);
         }
       }
@@ -450,20 +617,40 @@ app.whenReady().then(() => {
 
   ipcMain.handle('save-config', async (event, configData) => {
     try {
+      console.log('[Config] ===== Saving config =====');
+      console.log('[Config] Active model ID:', configData.activeModelId);
+      console.log('[Config] Available models:', configData.models?.map(m => ({ id: m.id, format: m.modelFormat || 'gguf' })));
+      
       fs.writeFileSync(configPath, JSON.stringify(configData, null, 2), 'utf-8');
+      
       if (configData.activeModelId) {
-        const activeModel = configData.models.find(m => m.id === configData.activeModelId);
+        const activeModel = configData.models?.find(m => m.id === configData.activeModelId);
         if (activeModel) {
+          // modelFormat이 없으면 기본값 'gguf'로 설정
+          if (!activeModel.modelFormat) {
+            activeModel.modelFormat = 'gguf';
+          }
+          
+          console.log('[Config] Found active model:', {
+            id: activeModel.id,
+            path: activeModel.modelPath,
+            format: activeModel.modelFormat
+          });
+          
+          // 서버 시작 (형식에 따라 자동 전환)
           startLlamaServer(activeModel);
+        } else {
+          console.error('[Config] Active model not found in models array:', configData.activeModelId);
+          console.error('[Config] Available model IDs:', configData.models?.map(m => m.id));
         }
       } else {
-        if (llamaServerProcess) {
-          llamaServerProcess.kill();
-        }
+        console.log('[Config] No active model ID, stopping current server');
+        // 활성 모델이 없으면 현재 서버 종료
+        stopCurrentServer();
       }
       return { success: true };
     } catch (error) {
-      console.error('Failed to save config:', error);
+      console.error('[Config] Failed to save config:', error);
       return { success: false, error: error.message };
     }
   });
@@ -479,6 +666,66 @@ app.whenReady().then(() => {
       return parseGgufInfoFromFile(modelPath);
     } catch (error) {
       return { ok: false, error: error.message || String(error) };
+    }
+  });
+
+  ipcMain.handle('verify-mlx-model', async (_event, modelId) => {
+    try {
+      if (!modelId || typeof modelId !== 'string') {
+        return { exists: false, error: 'Invalid modelId' };
+      }
+      
+      // 프로젝트 루트 경로 찾기
+      let projectRoot = __dirname;
+      // Electron 패키징된 경우를 대비해 resourcesPath 확인
+      if (app.isPackaged) {
+        projectRoot = process.resourcesPath || __dirname;
+      }
+      
+      const mlxModelsDir = path.join(projectRoot, 'mlx', 'models');
+      const modelPath = path.join(mlxModelsDir, modelId);
+      
+      console.log(`[MLX Verify] Checking model: ${modelId}`);
+      console.log(`[MLX Verify] Project root: ${projectRoot}`);
+      console.log(`[MLX Verify] MLX models dir: ${mlxModelsDir}`);
+      console.log(`[MLX Verify] Model path: ${modelPath}`);
+      console.log(`[MLX Verify] Model path exists: ${fs.existsSync(modelPath)}`);
+      
+      // MLX 모델은 디렉토리 형태이므로 디렉토리 존재 여부와 config.json 파일 확인
+      if (fs.existsSync(modelPath)) {
+        const stats = fs.statSync(modelPath);
+        console.log(`[MLX Verify] Is directory: ${stats.isDirectory()}`);
+        
+        if (stats.isDirectory()) {
+          const configPath = path.join(modelPath, 'config.json');
+          const hasConfig = fs.existsSync(configPath);
+          console.log(`[MLX Verify] Config path: ${configPath}`);
+          console.log(`[MLX Verify] Config exists: ${hasConfig}`);
+          
+          if (hasConfig) {
+            return { exists: true, path: modelPath };
+          } else {
+            return { exists: false, error: 'config.json not found in model directory' };
+          }
+        } else {
+          return { exists: false, error: 'Model path is not a directory' };
+        }
+      }
+      
+      // 경로가 없으면 상대 경로로도 시도
+      const altPath = path.resolve(__dirname, '..', 'mlx', 'models', modelId);
+      console.log(`[MLX Verify] Trying alternative path: ${altPath}`);
+      if (fs.existsSync(altPath) && fs.statSync(altPath).isDirectory()) {
+        const configPath = path.join(altPath, 'config.json');
+        if (fs.existsSync(configPath)) {
+          return { exists: true, path: altPath };
+        }
+      }
+      
+      return { exists: false, error: `Model directory not found at ${modelPath}` };
+    } catch (error) {
+      console.error(`[MLX Verify] Error:`, error);
+      return { exists: false, error: error.message || String(error) };
     }
   });
 

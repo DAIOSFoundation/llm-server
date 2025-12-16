@@ -5,6 +5,10 @@
   },
   "gemma-3-27b-it-q4_0": {
     "contextSize": 2048,
+    "gpuLayers": 0
+  },
+  "openai-gpt-oss-20b-f16": {
+    "contextSize": 2048,
     "gpuLayers": -1
   }
 }

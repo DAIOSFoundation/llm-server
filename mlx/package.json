@@ -1,0 +1,20 @@
+{
+  "name": "mlx-server-native",
+  "version": "1.0.0",
+  "description": "Native module for MLX server",
+  "main": "native.js",
+  "scripts": {
+    "install": "node-gyp rebuild",
+    "build": "node-gyp rebuild"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "node-addon-api": "^7.0.0"
+  },
+  "devDependencies": {
+    "node-gyp": "^10.0.0"
+  }
+}
+

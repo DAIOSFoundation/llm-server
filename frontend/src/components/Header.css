@@ -78,8 +78,8 @@
 /* Model Selector Dropdown Styles */
 .model-selector-dropdown {
   position: relative;
-  min-width: 250px;
-  max-width: 400px;
+  min-width: 500px;
+  max-width: 800px;
 }
 
 .current-model-display {

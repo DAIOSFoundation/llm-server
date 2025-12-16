@@ -1,21 +1,37 @@
 .settings-page-layout {
-  display: grid;
-  grid-template-columns: 300px 1fr; /* Sidebar and main content */
-  grid-template-rows: 1fr auto; /* Content and footer */
-  grid-template-areas:
-    "sidebar main"
-    "footer footer";
+  display: flex;
+  flex-direction: column;
   height: 100%;
   width: 100%;
 }
 
+.settings-page-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.settings-panel-group {
+  width: 100%;
+  height: 100%;
+  display: flex;
+}
+
+.settings-page-footer {
+  flex-shrink: 0;
+}
+
 .model-list-panel {
-  grid-area: sidebar;
   background-color: #2a2a2a;
   padding: 1.5rem;
   border-right: 1px solid #333;
   display: flex;
   flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .model-list-panel h3 {
@@ -90,9 +106,11 @@
 
 
 .model-form-panel {
-  grid-area: main;
+  height: 100%;
+  width: 100%;
   overflow-y: auto;
   padding: 2rem;
+  box-sizing: border-box;
 }
 
 .no-model-selected {
@@ -183,12 +201,29 @@
 
 
 .settings-footer {
-  grid-area: footer;
   display: flex;
   justify-content: flex-end;
   padding: 1rem 2rem;
   border-top: 1px solid #333;
   background-color: #2a2a2a;
+}
+
+/* Resizable Panel Styles */
+.resizable-panel-handle {
+  background-color: #333;
+  width: 8px;
+  cursor: col-resize;
+  transition: background-color 0.2s;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.resizable-panel-handle:hover {
+  background-color: #4CAF50;
+}
+
+.resizable-panel-handle[data-resize-handle-state="drag"] {
+  background-color: #4CAF50;
 }
 
 .footer-button {

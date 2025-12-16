@@ -98,7 +98,7 @@ const ModelForm = ({ config, onChange }) => {
 
   useEffect(() => {
     const defaults = {
-      name: 'New Model', modelPath: '', accelerator: 'auto', gpuLayers: 0,
+      name: 'New Model', modelPath: '', modelFormat: 'gguf', accelerator: 'auto', gpuLayers: 0,
       contextSize: 2048, maxTokens: 600, temperature: 0.7, topK: 40, topP: 0.95,
       minP: 0.05, tfsZ: 1.0, typicalP: 1.0, repeatPenalty: 1.15, repeatLastN: 128,
       penalizeNL: true, presencePenalty: 0.0, frequencyPenalty: 0.0,
@@ -219,6 +219,8 @@ const ModelForm = ({ config, onChange }) => {
 
   const handleVerifyPath = async () => {
     const raw = (formData.modelPath || '').trim();
+    const modelFormat = formData.modelFormat || 'gguf';
+    
     if (!raw) {
       setPathCheck({ status: 'error', message: t('settings.verifyPathEmpty') });
       setGgufInfo(null);
@@ -227,59 +229,137 @@ const ModelForm = ({ config, onChange }) => {
 
     setPathCheck({ status: 'checking', message: '' });
     try {
-      // 라우터 모드에서는 modelPath에 "모델 ID"가 들어갑니다.
-      // - 절대/상대 경로(슬래시 포함)면 그대로 GGUF 경로로 간주
-      // - 그 외에는 서버가 --models-dir 기준으로 id를 gguf 경로로 해석합니다.
-      const looksLikePath = raw.includes('/') || raw.includes('\\') || raw.endsWith('.gguf');
-      const modelId = raw.replace(/\.gguf$/i, '');
-
-      const extractErrorMessage = (info) => {
-        if (!info) return '';
-        if (typeof info.error === 'string') return info.error;
-        if (info.error && typeof info.error === 'object') {
-          if (typeof info.error.message === 'string') return info.error.message;
+      if (modelFormat === 'mlx') {
+        // MLX 모델 검증: mlx/models/ 디렉토리에서 확인
+        const modelId = raw;
+        
+        // Electron API를 통해 파일 시스템 확인
+        if (window.electronAPI && window.electronAPI.verifyMlxModel) {
+          const result = await window.electronAPI.verifyMlxModel(modelId);
+          if (result.exists) {
+            setPathCheck({ status: 'ok', message: t('settings.verifyPathOkMLX') });
+            setGgufInfo(null); // MLX는 GGUF 정보 없음
+          } else {
+            setPathCheck({ status: 'error', message: t('settings.verifyPathFailMLX') });
+            setGgufInfo(null);
+          }
+        } else {
+          // 클라이언트 모드: 서버 API 호출
+          // 먼저 메인 서버(8080)에서 시도, 없으면 프록시 서버(8081)에서 시도
+          try {
+            let res = null;
+            let result = null;
+            
+            // 1. 메인 서버(MLX 서버 또는 llama.cpp 서버)에서 시도
+            try {
+              res = await fetch(`${LLAMA_BASE_URL}/mlx-verify`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: modelId }),
+                signal: AbortSignal.timeout(5000),
+              });
+              
+              if (res.ok) {
+                result = await res.json().catch(() => null);
+              }
+            } catch (e) {
+              // 메인 서버에서 실패하면 무시하고 프록시 서버 시도
+              console.log('[MLX Verify] Main server failed, trying proxy');
+            }
+            
+            // 2. 프록시 서버(8081)에서 시도 (메인 서버에 엔드포인트가 없는 경우)
+            if (!result || !res || !res.ok) {
+              try {
+                const proxyUrl = LLAMA_BASE_URL.replace(':8080', ':8081');
+                res = await fetch(`${proxyUrl}/mlx-verify`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ model: modelId }),
+                  signal: AbortSignal.timeout(5000),
+                });
+                
+                if (res.ok) {
+                  result = await res.json().catch(() => null);
+                }
+              } catch (e) {
+                console.error('[MLX Verify] Proxy server also failed:', e);
+              }
+            }
+            
+            // 결과 처리
+            if (result && result.exists) {
+              setPathCheck({ status: 'ok', message: t('settings.verifyPathOkMLX') });
+              setGgufInfo(null);
+            } else {
+              const errorMsg = result?.error || t('settings.verifyPathFailMLX');
+              setPathCheck({ status: 'error', message: errorMsg });
+              setGgufInfo(null);
+            }
+          } catch (error) {
+            console.error('[MLX Verify] Fetch error:', error);
+            setPathCheck({ 
+              status: 'error', 
+              message: `서버 연결 실패: ${error.message}. MLX 검증 프록시 서버가 실행 중인지 확인하세요.` 
+            });
+            setGgufInfo(null);
+          }
         }
-        return '';
-      };
-
-      const callBy = async (payload) => {
-        const res = await fetch(`${LLAMA_BASE_URL}/gguf-info`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(10000),
-        });
-        const info = await res.json().catch(() => null);
-        return { res, info };
-      };
-
-      // 1) Preferred: server resolves by {model} (router mode)
-      let out = looksLikePath
-        ? await callBy({ path: raw })
-        : await callBy({ model: modelId });
-
-      // 2) Backward-compatible fallback for older servers: resolve path via /models and retry with {path}
-      if (!(out.res.ok && out.info && out.info.ok) && !looksLikePath) {
-        const listRes = await fetch(`${LLAMA_BASE_URL}/models`, { signal: AbortSignal.timeout(4000) });
-        const listJson = await listRes.json().catch(() => null);
-        const items = listJson && Array.isArray(listJson.data) ? listJson.data : [];
-        const found = items.find((m) => m && m.id === modelId);
-        if (found && found.path) {
-          out = await callBy({ path: found.path });
-        }
-      }
-
-      if (out.res.ok && out.info && out.info.ok) {
-        setGgufInfo(out.info);
-        setPathCheck({ status: 'ok', message: t('settings.verifyPathOk') });
       } else {
-        const msg = extractErrorMessage(out.info);
-        setGgufInfo(null);
-        setPathCheck({ status: 'error', message: msg || t('settings.verifyPathFail') });
+        // GGUF 모델 검증 (기존 로직)
+        const looksLikePath = raw.includes('/') || raw.includes('\\') || raw.endsWith('.gguf');
+        const modelId = raw.replace(/\.gguf$/i, '');
+
+        const extractErrorMessage = (info) => {
+          if (!info) return '';
+          if (typeof info.error === 'string') return info.error;
+          if (info.error && typeof info.error === 'object') {
+            if (typeof info.error.message === 'string') return info.error.message;
+          }
+          return '';
+        };
+
+        const callBy = async (payload) => {
+          const res = await fetch(`${LLAMA_BASE_URL}/gguf-info`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(10000),
+          });
+          const info = await res.json().catch(() => null);
+          return { res, info };
+        };
+
+        // 1) Preferred: server resolves by {model} (router mode)
+        let out = looksLikePath
+          ? await callBy({ path: raw })
+          : await callBy({ model: modelId });
+
+        // 2) Backward-compatible fallback for older servers: resolve path via /models and retry with {path}
+        if (!(out.res.ok && out.info && out.info.ok) && !looksLikePath) {
+          const listRes = await fetch(`${LLAMA_BASE_URL}/models`, { signal: AbortSignal.timeout(4000) });
+          const listJson = await listRes.json().catch(() => null);
+          const items = listJson && Array.isArray(listJson.data) ? listJson.data : [];
+          const found = items.find((m) => m && m.id === modelId);
+          if (found && found.path) {
+            out = await callBy({ path: found.path });
+          }
+        }
+
+        if (out.res.ok && out.info && out.info.ok) {
+          setGgufInfo(out.info);
+          setPathCheck({ status: 'ok', message: t('settings.verifyPathOkGGUF') });
+        } else {
+          const msg = extractErrorMessage(out.info);
+          setGgufInfo(null);
+          setPathCheck({ status: 'error', message: msg || t('settings.verifyPathFailGGUF') });
+        }
       }
     } catch (_e) {
       setGgufInfo(null);
-      setPathCheck({ status: 'error', message: t('settings.verifyPathFail') });
+      const errorMsg = modelFormat === 'mlx' 
+        ? t('settings.verifyPathFailMLX')
+        : t('settings.verifyPathFailGGUF');
+      setPathCheck({ status: 'error', message: errorMsg });
     }
   };
   
@@ -326,7 +406,36 @@ const ModelForm = ({ config, onChange }) => {
 
   return (
     <div className="model-form">
-      {/* Acceleration Section */}
+      {/* Model Format - 최상단 */}
+      <div className="form-section">
+        <h3>{t('settings.modelFormat')}</h3>
+        <div className="form-group">
+          <div className="radio-group">
+            <label>
+              <input
+                type="radio"
+                name="modelFormat"
+                value="gguf"
+                checked={formData.modelFormat === 'gguf'}
+                onChange={handleChange}
+              />
+              {t('settings.modelFormatGGUF')}
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="modelFormat"
+                value="mlx"
+                checked={formData.modelFormat === 'mlx'}
+                onChange={handleChange}
+              />
+              {t('settings.modelFormatMLX')}
+            </label>
+          </div>
+        </div>
+      </div>
+
+      {/* Acceleration Section - 모델 형식 다음 */}
       <div className="form-section">
         <h3>{t('settings.acceleration')}</h3>
         <div className="form-grid">
@@ -345,7 +454,7 @@ const ModelForm = ({ config, onChange }) => {
           </div>
         </div>
       </div>
-      
+
       {/* Model Path */}
       <div className="form-section">
         <h3>{t('settings.modelPath')}</h3>
@@ -378,41 +487,43 @@ const ModelForm = ({ config, onChange }) => {
         </div>
       </div>
 
-      {/* Quantization Info Section */}
-      <div className="form-section">
-        <h3>{t('settings.quantizationInfo')}</h3>
-        <div className="quantization-grid">
-          <div className="quantization-left">
-            <div className="form-group">
-              <label>{t('settings.quantizationType')}</label>
-              <div className="static-value">
-                {quantInfo.type || '-'}
+      {/* Quantization Info Section - GGUF only */}
+      {formData.modelFormat === 'gguf' && (
+        <div className="form-section">
+          <h3>{t('settings.quantizationInfo')}</h3>
+          <div className="quantization-grid">
+            <div className="quantization-left">
+              <div className="form-group">
+                <label>{t('settings.quantizationType')}</label>
+                <div className="static-value">
+                  {quantInfo.type || '-'}
+                </div>
+              </div>
+              <div className="form-group">
+                <label>{t('settings.quantizationDetail')}</label>
+                <div className="static-value">
+                  {quantInfo.detail || '-'}
+                </div>
               </div>
             </div>
-            <div className="form-group">
-              <label>{t('settings.quantizationDetail')}</label>
-              <div className="static-value">
-                {quantInfo.detail || '-'}
-              </div>
-            </div>
-          </div>
 
-          <div className="quantization-description">
-            <div className="quantization-description-title">
-              {t('settings.quantizationGuide')}
+            <div className="quantization-description">
+              <div className="quantization-description-title">
+                {t('settings.quantizationGuide')}
+              </div>
+              {quantSummaryLines.length > 0 ? (
+                <ul className="quantization-summary">
+                  {quantSummaryLines.map((line, idx) => (
+                    <li key={idx} className="quantization-summary-item">{line}</li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="quantization-summary-empty">-</div>
+              )}
             </div>
-            {quantSummaryLines.length > 0 ? (
-              <ul className="quantization-summary">
-                {quantSummaryLines.map((line, idx) => (
-                  <li key={idx} className="quantization-summary-item">{line}</li>
-                ))}
-              </ul>
-            ) : (
-              <div className="quantization-summary-empty">-</div>
-            )}
           </div>
         </div>
-      </div>
+      )}
       
       {/* Inference Section */}
       <div className="form-section">
