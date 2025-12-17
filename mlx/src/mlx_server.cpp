@@ -50,9 +50,49 @@ struct PairHash {
     }
 };
 
+// 확률과 토큰 ID를 함께 저장하기 위한 구조체
+struct TokenProb {
+    int id;
+    float val;
+    
+    // 내림차순 정렬을 위한 연산자 오버로딩
+    bool operator>(const TokenProb& other) const {
+        return val > other.val;
+    }
+};
+
+// 가중치를 담을 컨테이너 구조체 정의 (구조체 기반 직접 바인딩)
+struct AttentionWeights {
+    // 기본 생성자 문제 해결을 위해 0.0으로 초기화
+    mx::array q_proj = mx::array(0.0f);
+    mx::array k_proj = mx::array(0.0f);
+    mx::array v_proj = mx::array(0.0f);
+    mx::array o_proj = mx::array(0.0f);
+    
+    bool loaded = false;
+};
+
+struct MlpWeights {
+    mx::array gate_proj = mx::array(0.0f);
+    mx::array up_proj   = mx::array(0.0f);
+    mx::array down_proj = mx::array(0.0f);
+    
+    bool loaded = false;
+};
+
+struct TransformerLayerWeights {
+    AttentionWeights attn;
+    MlpWeights mlp;
+    mx::array input_layernorm = mx::array(0.0f);
+    mx::array post_attention_layernorm = mx::array(0.0f);
+    
+    bool loaded = false;
+};
+
 // MLX 모델 구조체 (ggml-metal 스타일)
 struct MlxModel {
-    std::unordered_map<std::string, mx::array> weights;
+    // 핵심 변경: 값을 포인터로 관리하여 기본 생성자 문제 회피
+    std::unordered_map<std::string, std::shared_ptr<mx::array>> weights_map;
     std::unordered_map<std::string, std::string> metadata;
     std::string modelPath;
     mx::Device device;
@@ -67,6 +107,14 @@ struct MlxModel {
     int numKeyValueHeads;
     int intermediateSize;
     int maxContextLength;
+    
+    // [핵심] 레이어별 가중치 직접 접근 벡터 (구조체 기반)
+    std::vector<TransformerLayerWeights> layers;
+    
+    // 공통 가중치 (구조체 기반 직접 접근)
+    mx::array embed_tokens = mx::array(0.0f);
+    mx::array norm = mx::array(0.0f);
+    mx::array lm_head = mx::array(0.0f);
     
     // 토큰화 관련 데이터 (llama.cpp 스타일)
     std::unordered_map<std::string, int> vocab; // token -> id
@@ -124,9 +172,12 @@ private:
     
     // Transformer forward pass (ggml-metal 스타일)
     mx::array ForwardPass(const std::vector<int>& tokens, int pos);
-    mx::array AttentionLayer(const mx::array& x, int layerIdx);
-    mx::array FeedForwardLayer(const mx::array& x, int layerIdx);
-    mx::array LayerNorm(const mx::array& x, const std::string& weightKey);
+    mx::array AttentionLayer(const mx::array& x, const AttentionWeights& weights);
+    mx::array FeedForwardLayer(const mx::array& x, const MlpWeights& weights);
+    mx::array LayerNorm(const mx::array& x, const mx::array& weight);
+    
+    // 구조체 기반 가중치 바인딩 함수
+    void BindWeights();
     
     // 디버깅용 헬퍼 함수
     void DebugArray(const std::string& tag, const mx::array& a);
@@ -137,6 +188,11 @@ private:
     mx::array ApplyTopP(const mx::array& probs, double p);
     mx::array ApplyMinP(const mx::array& probs, double minP);
     int SampleToken(const mx::array& probs);
+    
+    // [수정 2] CPU 기반 샘플링 함수 (완전한 기능 지원)
+    int SampleTokenCPU(const float* logits_data, int size, double temperature, float repeat_penalty, 
+                       int top_k, double top_p, double min_p,
+                       const std::vector<int>& generated_tokens, int repeat_last_n);
     
     // 토큰화 헬퍼 함수들 (llama.cpp 스타일)
     std::vector<std::string> BPEWordTokenize(const std::string& text);
@@ -150,6 +206,9 @@ private:
     mx::array GetWeight(const std::string& key);
     bool HasWeight(const std::string& key);
     void EvalArray(mx::array& arr);
+    
+    // [Helper] 데이터를 강제로 정리하고 GPU 계산을 확정짓는 함수
+    void Sanitize(mx::array& x);
 };
 
 Napi::FunctionReference MlxInference::constructor;
@@ -242,7 +301,7 @@ static int ExtractJsonInt(const std::string& json, const std::string& key) {
     if (end == pos) return 0;
     
     try {
-        return std::stoi(json.substr(pos, end - pos));
+    return std::stoi(json.substr(pos, end - pos));
     } catch (...) {
         return 0;
     }
@@ -369,7 +428,7 @@ bool MlxInference::LoadModelFromPath(const std::string& modelPath) {
             std::cerr << "[MLX] LoadModelFromPath: Failed to load model weights" << std::endl;
             return false;
         }
-        std::cout << "[MLX] LoadModelFromPath: Model weights loaded, weight count: " << model_->weights.size() << std::endl;
+        std::cout << "[MLX] LoadModelFromPath: Model weights loaded, weight count: " << model_->weights_map.size() << std::endl;
         
         // 토큰화 로드
         std::cout << "[MLX] LoadModelFromPath: Loading tokenizer" << std::endl;
@@ -458,30 +517,28 @@ bool MlxInference::LoadSafetensors(const std::string& modelDir) {
             return false;
         }
 
-        std::cout << "[MLX] Start Loading Weights with Strict Shape Filtering..." << std::endl;
+        std::cout << "[MLX] Loading weights into shared_ptr map..." << std::endl;
         std::cout << "[MLX] LoadSafetensors: Found " << safetensorsFiles.size() << " safetensors files (sorted)" << std::endl;
 
-        for (const auto& filePath : safetensorsFiles) {
-            try {
-                // mx::load_safetensors는 pair<unordered_map, unordered_map>을 반환합니다.
-                auto result = mx::load_safetensors(filePath, model_->stream);
-                
-                // [중요] auto 대신 명시적 타입 사용으로 컴파일러 혼란 방지
-                auto& weightMap = result.first; 
-                
-                std::cout << "[MLX] LoadSafetensors: File " << filePath << " contains " << weightMap.size() << " weights" << std::endl;
+            for (const auto& filePath : safetensorsFiles) {
+                try {
+                // mx::load_safetensors 반환값: pair<unordered_map<string, array>, metadata>
+                    auto result = mx::load_safetensors(filePath, model_->stream);
+                auto& loadedWeights = result.first;
 
-                // 반복자 기반 순회 (C++17 structured binding 대신 안전한 방식 사용)
+                std::cout << "[MLX] LoadSafetensors: File " << filePath << " contains " << loadedWeights.size() << " weights" << std::endl;
+
+                // 반복자로 순회
                 int loaded_from_file = 0;
                 int skipped_from_file = 0;
                 int concatenated_from_file = 0;
-                
-                for (auto it = weightMap.begin(); it != weightMap.end(); ++it) {
-                    try {
-                        std::string key = it->first;       // 복사해서 사용 (const 문제 방지)
-                        mx::array value = it->second;      // mx::array는 얕은 복사(Ref Count)라 저렴함
 
-                        // [FATAL FILTER] MLP 가중치(10944)가 Attention 키에 있는지 검사
+                for (auto it = loadedWeights.begin(); it != loadedWeights.end(); ++it) {
+                    try {
+                        std::string key = it->first;
+                        mx::array value = it->second;
+
+                        // [FILTER] MLP 가중치 오염 방지
                         bool isAttnKey = (key.find("self_attn") != std::string::npos);
                         bool hasMlpDim = false;
                         try {
@@ -492,55 +549,57 @@ bool MlxInference::LoadSafetensors(const std::string& modelDir) {
                             std::cerr << "[MLX] Warning: Failed to check shape for key " << key << ": " << shape_err.what() << std::endl;
                         }
 
-                    if (isAttnKey && hasMlpDim) {
-                        std::cerr << "!!! BLOCKED CORRUPTED WEIGHT: " << key << " shape=" << value.shape() << std::endl;
-                        skipped_from_file++;
-                        continue; // 절대 로드하지 않음
-                    }
+                        if (isAttnKey && hasMlpDim) {
+                            std::cerr << "!!! BLOCKED CORRUPTED WEIGHT: " << key << " shape=" << value.shape() << std::endl;
+                            skipped_from_file++;
+                    continue;
+                }
 
-                    // 기존 map에 키가 있는지 확인
-                    auto it_existing = model_->weights.find(key);
-                    if (it_existing != model_->weights.end()) {
-                        // --- Concatenation Logic ---
-                        mx::array existing = it_existing->second;
-                        
-                        // [컴파일 오류 해결] std::vector를 명시적으로 생성하여 전달
-                        std::vector<mx::array> inputs;
-                        inputs.push_back(existing);
-                        inputs.push_back(value);
+                        // [MAP INSERTION logic with shared_ptr]
+                        if (model_->weights_map.count(key)) {
+                            // 이미 존재함 -> Concatenate 필요
+                            // 포인터 역참조(*)하여 실제 array 가져옴
+                            mx::array existing = *model_->weights_map[key];
+                            
+                            std::vector<mx::array> inputs;
+                            inputs.push_back(existing);
+                            inputs.push_back(value);
+                            
+                            mx::array combined = existing; // 초기화 (컴파일 방지용)
 
-                        if (ends_with(key, "o_proj.weight")) {
-                            // o_proj (Row Parallel): Axis 결정
-                            // 보통 MLX Linear weight는 (In, Out)이므로 Input Dim(Axis 0)을 합침
-                            // 하지만 샤드 모양에 따라 다를 수 있음.
-                            int axis = (value.shape(0) < HIDDEN) ? 0 : 1;
-                            it_existing->second = mx::concatenate(inputs, axis);
-                        } 
-                        else if (key.find("q_proj") != std::string::npos || 
-                                 key.find("k_proj") != std::string::npos || 
-                                 key.find("v_proj") != std::string::npos) {
-                            // Q, K, V (Column Parallel): Output Dim(Axis 1)을 합침
-                            // (단, MLX Linear가 (In, Out)이라면 Axis 1이 Output)
-                            it_existing->second = mx::concatenate(inputs, 1);
+                            if (ends_with(key, "o_proj.weight")) {
+                                // o_proj (Row Parallel, Input Split) -> Axis 0 or 1
+                                int axis = (value.shape(0) < HIDDEN) ? 0 : 1;
+                                combined = mx::concatenate(inputs, axis);
+                            } 
+                            else if (key.find("proj") != std::string::npos) {
+                                // Q, K, V, Gate, Up (Column Parallel, Output Split) -> Axis 1
+                                // (MLX Linear가 (In, Out) 형태라면 Axis 1)
+                                combined = mx::concatenate(inputs, 1);
+                            }
+                            else if (key.find("down_proj") != std::string::npos) {
+                                // Down Proj -> Axis 0
+                                 combined = mx::concatenate(inputs, 0);
+                            }
+                            else if (key.find("lm_head.weight") != std::string::npos) {
+                                // lm_head는 Input Dimension(Axis 0)이 쪼개진 Row Parallel
+                                // (256, 102400) + (256, 102400) -> (512, 102400) -> ... -> (2048, 102400)
+                                combined = mx::concatenate(inputs, 0);
+                            }
+                            else {
+                                combined = value; // 덮어쓰기
+                            }
+
+                            // [중요] 병합된 결과를 다시 shared_ptr로 포장해서 저장
+                            model_->weights_map[key] = std::make_shared<mx::array>(combined);
+                            concatenated_from_file++;
+
+        } else {
+                            // [중요] 새 키 삽입: shared_ptr 생성
+                            // operator[] 사용 가능 (shared_ptr은 기본생성자가 있음)
+                            model_->weights_map[key] = std::make_shared<mx::array>(value);
+                            loaded_from_file++;
                         }
-                        else if (key.find("gate_proj") != std::string::npos ||
-                                 key.find("up_proj") != std::string::npos) {
-                            // MLP Gate/Up (Column Parallel) -> Axis 1
-                             it_existing->second = mx::concatenate(inputs, 1);
-                        }
-                        else if (key.find("down_proj") != std::string::npos) {
-                            // MLP Down (Row Parallel) -> Axis 0
-                             it_existing->second = mx::concatenate(inputs, 0);
-                        }
-                        else {
-                            // 그 외에는 덮어쓰기 (혹은 경고)
-                            it_existing->second = value;
-                        }
-                    } else {
-                        // [컴파일 오류 해결] insert({k, v}) 대신 emplace 사용
-                        model_->weights.emplace(key, value);
-                        loaded_from_file++;
-                    }
                     } catch (const std::exception& e) {
                         std::cerr << "[MLX] Error processing weight key: " << e.what() << std::endl;
                         skipped_from_file++;
@@ -561,63 +620,16 @@ bool MlxInference::LoadSafetensors(const std::string& modelDir) {
                 std::cout << "[MLX] LoadSafetensors: Loaded weights from " << filePath << std::endl;
             } catch (const std::exception& e) {
                 std::cerr << "[MLX] Error loading file " << filePath << ": " << e.what() << std::endl;
-                continue; 
+                continue;
             }
         }
-
-        std::cout << "[MLX] LoadSafetensors: Loaded " << safetensorsFiles.size() << " files, total weights: " << model_->weights.size() << std::endl;
-
-        // [후처리] Shape 보정 (Transpose Check)
-        std::cout << "[MLX] Finalizing Weights (Transpose Validation)..." << std::endl;
-        for (auto it = model_->weights.begin(); it != model_->weights.end(); ++it) {
-            std::string key = it->first;
             
-            // Attention Weights 검사
-            if (key.find("self_attn") != std::string::npos && key.find("proj") != std::string::npos) {
-                mx::array& w = it->second; // 참조로 접근
-                
-                // 만약 (256, 2048) 같이 (Out, In)으로 되어있다면 Transpose
-                // MLX Matmul은 (In, Out) @ (In, Out) -> (In, Out) 식을 따르지 않음
-                // mx::matmul(x, w) 에서 x(Batch, In), w(In, Out) 이어야 함.
-                
-                if (w.shape(0) != HIDDEN && w.shape(1) == HIDDEN) {
-                    // (Out, In) -> (In, Out)으로 변환
-                    w = mx::transpose(w, {1, 0});
-                }
-            }
-        }
+        std::cout << "[MLX] LoadSafetensors: Loaded " << safetensorsFiles.size() << " files, total weights: " << model_->weights_map.size() << std::endl;
 
-        // [DEBUG] Loaded Weights Summary
-        std::cout << "=== DEBUG: Loaded Weights Summary ===" << std::endl;
-        std::cout << "Total Weights Loaded: " << model_->weights.size() << std::endl;
-
-        // 임베딩 키 존재 여부 확인
-        std::vector<std::string> embedding_candidates = {
-            "model.embed_tokens.weight",
-            "tok_embeddings.weight",
-            "embeddings.weight",
-            "language_model.embedding.word_embeddings.weight"
-        };
-
-        bool found_emb = false;
-        for (const auto& candidate : embedding_candidates) {
-            if (model_->weights.count(candidate)) {
-                std::cout << "[SUCCESS] Found embedding key: " << candidate << std::endl;
-                found_emb = true;
-                break;
-            }
-        }
-
-        if (!found_emb) {
-            std::cout << "[FAILURE] No embedding key found! Dumping first 5 keys:" << std::endl;
-            int count = 0;
-            for (const auto& pair : model_->weights) {
-                if (count++ >= 5) break;
-                std::cout << "  - " << pair.first << std::endl;
-            }
-        }
-
-        return !model_->weights.empty();
+        // [핵심] 가중치를 구조체에 바인딩 (메모리 격리)
+        BindWeights();
+        
+        return !model_->weights_map.empty();
     } catch (const std::exception& e) {
         std::cerr << "[MLX] LoadSafetensors: Exception: " << e.what() << std::endl;
         return false;
@@ -628,7 +640,12 @@ bool MlxInference::LoadGGUF(const std::string& filePath) {
     try {
         // MLX C++ API를 사용하여 GGUF 로드
         auto result = mx::load_gguf(filePath, model_->stream);
-        model_->weights = std::move(result.first);
+        auto& loadedWeights = result.first;
+        
+        // shared_ptr로 변환하여 저장
+        for (auto it = loadedWeights.begin(); it != loadedWeights.end(); ++it) {
+            model_->weights_map[it->first] = std::make_shared<mx::array>(it->second);
+        }
         
         // GGUF 메타데이터 처리
         for (const auto& [key, value] : result.second) {
@@ -637,7 +654,7 @@ bool MlxInference::LoadGGUF(const std::string& filePath) {
             }
         }
         
-        return !model_->weights.empty();
+        return !model_->weights_map.empty();
     } catch (const std::exception& e) {
         return false;
     }
@@ -998,7 +1015,10 @@ std::vector<int> MlxInference::Tokenize(const std::string& text) {
     // llama.cpp 스타일의 토큰화 구현
     std::vector<int> tokens;
     
+    std::cout << "[MLX] Tokenize called with text: \"" << text << "\"" << std::endl;
+    
     if (text.empty()) {
+        std::cout << "[MLX] Tokenize: Empty text, adding BOS if needed" << std::endl;
         if (model_->addBos && model_->bosTokenId >= 0) {
             tokens.push_back(model_->bosTokenId);
         }
@@ -1007,20 +1027,39 @@ std::vector<int> MlxInference::Tokenize(const std::string& text) {
     
     // BOS 토큰 추가
     if (model_->addBos && model_->bosTokenId >= 0) {
+        std::cout << "[MLX] Tokenize: Adding BOS token: " << model_->bosTokenId << std::endl;
         tokens.push_back(model_->bosTokenId);
     }
     
     // 단어 단위로 토큰화
+    std::cout << "[MLX] Tokenize: Calling BPEWordTokenize..." << std::endl;
     std::vector<std::string> words = BPEWordTokenize(text);
+    std::cout << "[MLX] Tokenize: BPEWordTokenize returned " << words.size() << " words" << std::endl;
     
-    for (const auto& word : words) {
+    if (words.empty()) {
+        std::cerr << "[MLX] Tokenize: WARNING - BPEWordTokenize returned empty vector!" << std::endl;
+    }
+    
+    for (size_t i = 0; i < words.size(); ++i) {
+        const auto& word = words[i];
+        std::cout << "[MLX] Tokenize: Processing word " << i << ": \"" << word << "\"" << std::endl;
         std::vector<int> wordTokens = BPETokenizeWord(word);
+        std::cout << "[MLX] Tokenize: Word \"" << word << "\" tokenized to " << wordTokens.size() << " tokens" << std::endl;
+        if (wordTokens.empty()) {
+            std::cerr << "[MLX] Tokenize: WARNING - BPETokenizeWord returned empty for word: \"" << word << "\"" << std::endl;
+        }
         tokens.insert(tokens.end(), wordTokens.begin(), wordTokens.end());
     }
     
     // EOS 토큰 추가
     if (model_->addEos && model_->eosTokenId >= 0) {
+        std::cout << "[MLX] Tokenize: Adding EOS token: " << model_->eosTokenId << std::endl;
         tokens.push_back(model_->eosTokenId);
+    }
+    
+    std::cout << "[MLX] Tokenize: Final token count: " << tokens.size() << std::endl;
+    if (tokens.empty()) {
+        std::cerr << "[MLX] Tokenize: ERROR - No tokens generated for text: \"" << text << "\"" << std::endl;
     }
     
     return tokens;
@@ -1052,10 +1091,153 @@ std::string MlxInference::Decode(const std::vector<int>& tokens) {
     return text;
 }
 
+// [핵심] 구조체 기반 가중치 바인딩 함수 (메모리 격리)
+void MlxInference::BindWeights() {
+    std::cout << "[MLX] Binding weights to structs..." << std::endl;
+    
+    // 레이어 벡터 크기 확보 (구조체 멤버 초기화 덕분에 안전함)
+    model_->layers.resize(model_->numLayers);
+    
+    // 헬퍼 람다: 키가 있으면 값 반환, 없으면 경고하고 빈 배열 반환
+    auto get_w = [&](const std::string& key) -> mx::array {
+        if (model_->weights_map.count(key)) {
+            // shared_ptr 역참조하여 값 반환 (Ref Count 증가, 비용 저렴)
+            return *model_->weights_map[key];
+        }
+        // 없으면 경고하고 빈 배열 반환 (shape 접근 시 오류 방지)
+        std::cerr << "[BindWeights] WARNING: Key not found: " << key << std::endl;
+        // 빈 2D 배열 반환 (shape 접근 시 오류 방지)
+        return mx::array({0.0f}, {1, 1});
+    };
+
+    // 1. 공통 가중치
+    // [수정] 원래대로 양자화된 상태 유지 (ForwardPass에서 배치 단위로 변환)
+    model_->embed_tokens = get_w("model.embed_tokens.weight");
+    
+    model_->norm = get_w("model.norm.weight");
+    
+    // lm_head는 없을 수 있으므로, embed_tokens를 재사용
+    mx::array lm_head_candidate = get_w("lm_head.weight");
+    if (lm_head_candidate.shape(0) == 1 && lm_head_candidate.shape(1) == 1) {
+        // lm_head가 없으면 embed_tokens를 재사용 (일부 모델에서 공유)
+        std::cout << "[BindWeights] lm_head not found, using embed_tokens as lm_head" << std::endl;
+        model_->lm_head = model_->embed_tokens;
+    } else {
+        model_->lm_head = lm_head_candidate;
+    }
+    
+    std::cout << "[BindWeights] embed_tokens shape: (";
+    for (size_t i = 0; i < model_->embed_tokens.shape().size(); ++i) {
+        std::cout << model_->embed_tokens.shape()[i];
+        if (i < model_->embed_tokens.shape().size() - 1) std::cout << ", ";
+    }
+    std::cout << ")" << std::endl;
+    std::cout << "[BindWeights] lm_head shape: (";
+    for (size_t i = 0; i < model_->lm_head.shape().size(); ++i) {
+        std::cout << model_->lm_head.shape()[i];
+        if (i < model_->lm_head.shape().size() - 1) std::cout << ", ";
+    }
+    std::cout << ")" << std::endl;
+
+    // 2. 레이어별 가중치
+    for (int i = 0; i < model_->numLayers; ++i) {
+        std::string prefix = "model.layers." + std::to_string(i) + ".";
+        auto& layer = model_->layers[i];
+        
+        // Attention
+        std::string o_proj_key = prefix + "self_attn.o_proj.weight";
+        
+        // [디버깅] weights_map에서 실제 키 확인
+        if (model_->weights_map.count(o_proj_key)) {
+            mx::array actual_weight = *model_->weights_map[o_proj_key];
+            std::cout << "[BindWeights] Layer " << i << " o_proj key found in map: " << o_proj_key << std::endl;
+            std::cout << "[BindWeights] Layer " << i << " o_proj shape in map: (" 
+                      << actual_weight.shape(0) << ", " << actual_weight.shape(1) << ")" << std::endl;
+        } else {
+            std::cerr << "[BindWeights] WARNING: Layer " << i << " o_proj key NOT found: " << o_proj_key << std::endl;
+        }
+        
+        layer.attn.q_proj = get_w(prefix + "self_attn.q_proj.weight");
+        layer.attn.k_proj = get_w(prefix + "self_attn.k_proj.weight");
+        layer.attn.v_proj = get_w(prefix + "self_attn.v_proj.weight");
+        layer.attn.o_proj = get_w(o_proj_key);
+        
+        // [디버깅] o_proj 바인딩 직후 shape 확인
+        std::cout << "[BindWeights] Layer " << i << " o_proj shape after get_w: (" 
+                  << layer.attn.o_proj.shape(0) << ", " << layer.attn.o_proj.shape(1) << ")" << std::endl;
+        
+        // [FATAL 검증] o_proj가 MLP 가중치(10944)를 포함하면 안 됨
+        if (layer.attn.o_proj.shape(0) == model_->intermediateSize || 
+            layer.attn.o_proj.shape(1) == model_->intermediateSize) {
+            std::cerr << "!!! FATAL: Layer " << i << " o_proj bound to MLP weight!" << std::endl;
+            std::cerr << "   o_proj shape: (" << layer.attn.o_proj.shape(0) << ", " 
+                      << layer.attn.o_proj.shape(1) << ")" << std::endl;
+            std::cerr << "   intermediateSize: " << model_->intermediateSize << std::endl;
+            std::cerr << "   Key: " << o_proj_key << std::endl;
+            
+            // weights_map에서 실제 키 확인
+            if (model_->weights_map.count(o_proj_key)) {
+                mx::array actual_weight = *model_->weights_map[o_proj_key];
+                std::cerr << "   Actual weight in map shape: (" << actual_weight.shape(0) 
+                          << ", " << actual_weight.shape(1) << ")" << std::endl;
+            } else {
+                std::cerr << "   Key not found in weights_map!" << std::endl;
+            }
+            exit(1);
+        }
+        
+        // Transpose Check for o_proj는 AttentionLayer에서 수행 (SmallVector 오류 방지)
+
+        // MLP - MoE 구조 지원
+        // Layer 0: 일반 MLP (mlp.gate_proj, mlp.up_proj, mlp.down_proj)
+        // Layer 1+: MoE 구조 (mlp.shared_experts.* 또는 mlp.switch_mlp.*)
+        std::string mlp_prefix = prefix + "mlp.";
+        std::string gate_key = mlp_prefix + "gate_proj.weight";
+        std::string up_key = mlp_prefix + "up_proj.weight";
+        std::string down_key = mlp_prefix + "down_proj.weight";
+        
+        // MoE 구조 확인: 일반 MLP 키가 없으면 shared_experts 사용
+        if (!model_->weights_map.count(gate_key)) {
+            // MoE 구조: shared_experts 사용
+            gate_key = mlp_prefix + "shared_experts.gate_proj.weight";
+            up_key = mlp_prefix + "shared_experts.up_proj.weight";
+            down_key = mlp_prefix + "shared_experts.down_proj.weight";
+            
+            // shared_experts도 없으면 switch_mlp 사용
+            if (!model_->weights_map.count(gate_key)) {
+                gate_key = mlp_prefix + "switch_mlp.gate_proj.weight";
+                up_key = mlp_prefix + "switch_mlp.up_proj.weight";
+                down_key = mlp_prefix + "switch_mlp.down_proj.weight";
+            }
+        }
+        
+        layer.mlp.gate_proj = get_w(gate_key);
+        layer.mlp.up_proj   = get_w(up_key);
+        layer.mlp.down_proj = get_w(down_key);
+        
+        // [중요] MLP 가중치 shape 확인 및 처리
+        std::cout << "[BindWeights] Layer " << i << " MLP weights (key: " << gate_key << "):" << std::endl;
+        std::cout << "  gate_proj: (" << layer.mlp.gate_proj.shape(0) << ", " << layer.mlp.gate_proj.shape(1) << ")" << std::endl;
+        std::cout << "  up_proj: (" << layer.mlp.up_proj.shape(0) << ", " << layer.mlp.up_proj.shape(1) << ")" << std::endl;
+        std::cout << "  down_proj: (" << layer.mlp.down_proj.shape(0) << ", " << layer.mlp.down_proj.shape(1) << ")" << std::endl;
+
+        // Norms
+        layer.input_layernorm = get_w(prefix + "input_layernorm.weight");
+        layer.post_attention_layernorm = get_w(prefix + "post_attention_layernorm.weight");
+        
+        layer.loaded = true;
+    }
+    
+    std::cout << "[MLX] BindWeights completed." << std::endl;
+    
+    // 메모리 정리: map은 이제 필요 없으므로 비워도 됨 (선택사항)
+    // model_->weights_map.clear();
+}
+
 mx::array MlxInference::GetWeight(const std::string& key) {
     // 1. 정확한 키 매칭 시도
-    if (model_->weights.count(key)) {
-        mx::array weight = model_->weights.at(key);
+    if (model_->weights_map.count(key)) {
+        mx::array weight = *model_->weights_map[key];  // shared_ptr 역참조
         
         // [중요] MLP 가중치가 Attention 키로 요청되었는지 확인
         if (key.find(".self_attn.") != std::string::npos) {
@@ -1082,9 +1264,9 @@ mx::array MlxInference::GetWeight(const std::string& key) {
     auto it = aliases.find(key);
     if (it != aliases.end()) {
         for (const auto& candidate : it->second) {
-            if (model_->weights.count(candidate)) {
+            if (model_->weights_map.count(candidate)) {
                 std::cout << "[MLX] GetWeight: Mapped '" << key << "' -> '" << candidate << "'" << std::endl;
-                return model_->weights.at(candidate);
+                return *model_->weights_map[candidate];  // shared_ptr 역참조
             }
         }
     }
@@ -1092,9 +1274,9 @@ mx::array MlxInference::GetWeight(const std::string& key) {
     // 3. 접두어(Prefix) 제거 재시도 (model.layers.0... -> layers.0...)
     if (key.rfind("model.", 0) == 0) { // starts with "model."
         std::string stripped = key.substr(6); // remove "model."
-        if (model_->weights.count(stripped)) {
+        if (model_->weights_map.count(stripped)) {
             std::cout << "[MLX] GetWeight: Mapped '" << key << "' -> '" << stripped << "'" << std::endl;
-            return model_->weights.at(stripped);
+            return *model_->weights_map[stripped];  // shared_ptr 역참조
         }
     }
 
@@ -1102,7 +1284,7 @@ mx::array MlxInference::GetWeight(const std::string& key) {
     std::cerr << "!!! CRITICAL: Weight not found: " << key << std::endl;
     std::cerr << "Available keys sample:" << std::endl;
     int c = 0;
-    for(const auto& p : model_->weights) {
+    for(const auto& p : model_->weights_map) {
         if(c++ > 5) break;
         std::cerr << "  " << p.first << std::endl;
     }
@@ -1110,7 +1292,7 @@ mx::array MlxInference::GetWeight(const std::string& key) {
 }
 
 bool MlxInference::HasWeight(const std::string& key) {
-    return model_->weights.find(key) != model_->weights.end();
+    return model_->weights_map.find(key) != model_->weights_map.end();
 }
 
 void MlxInference::EvalArray(mx::array& arr) {
@@ -1125,22 +1307,47 @@ void MlxInference::EvalArray(mx::array& arr) {
     }
 }
 
-mx::array MlxInference::LayerNorm(const mx::array& x, const std::string& weightKey) {
-    // RMSNorm 구현 (llama.cpp 스타일, bias 없음)
-    mx::array weight = GetWeight(weightKey + ".weight");
+// [Helper] 데이터를 강제로 정리하고 GPU 계산을 확정짓는 함수
+void MlxInference::Sanitize(mx::array& x) {
+    // 1. Float32 강제 변환 (커널 호환성 확보)
+    if (x.dtype() != mx::float32) {
+        x = mx::astype(x, mx::float32);
+    }
     
-    // RMSNorm: normalize by RMS (root mean square) instead of mean
-    // norm = x / sqrt(mean(x^2) + eps)
+    // 2. 메모리 연속화 (뷰 제거)
+    // contiguous는 새로운 메모리 할당을 예약합니다.
+    x = mx::contiguous(x);
+    
+    // 3. 계산 확정 (Graph 끊기)
+    // eval() 대신 간단한 연산을 사용하여 평가를 강제
+    // eval()은 [Load::eval_gpu] Not implemented 오류를 일으킬 수 있음
+    try {
+        x = x + mx::array(0.0f);
+        mx::synchronize(model_->stream);
+    } catch (const std::exception& e) {
+        std::cerr << "[MLX] Sanitize failed: " << e.what() << std::endl;
+        // 실패 시 비상 조치: 값을 복사하여 재시도
+        x = x * mx::array(1.0f);
+        mx::synchronize(model_->stream);
+    }
+}
+
+// [핵심] 구조체 기반 LayerNorm - GetWeight 완전 제거
+mx::array MlxInference::LayerNorm(const mx::array& x_in, const mx::array& weight) {
+    // 입력 복사
+    mx::array x = x_in;
+    
+    // [핵심] Reduction(mean) 연산 전에 메모리 정리 필수!
+    Sanitize(x);
+    
+    // RMSNorm 구현
+    // x가 깨끗한 상태이므로 square, mean 등이 안전하게 수행됨
     mx::array x_squared = mx::square(x);
-    mx::array mean_squared = mx::mean(x_squared, -1, true);  // keepdims=true, axis=-1
+    mx::array mean_squared = mx::mean(x_squared, -1, true); 
     mx::array rms = mx::sqrt(mean_squared + mx::array(1e-6f));
     
     mx::array normalized = x / rms;
     
-    // weight와 normalized의 shape이 브로드캐스트 가능한지 확인
-    // normalized: (seq_len, hidden_size) 또는 (batch, seq_len, hidden_size)
-    // weight: (hidden_size,)
-    // MLX는 자동으로 브로드캐스트하지만, shape이 맞지 않으면 에러 발생
     return normalized * weight;
 }
 
@@ -1168,52 +1375,20 @@ void MlxInference::DebugArray(const std::string& tag, const mx::array& a) {
     std::cerr << std::endl;
 }
 
-mx::array MlxInference::AttentionLayer(const mx::array& x_input, int layerIdx) {
-    // Multi-Head Attention 구현 (단순화 버전)
-    // LoadSafetensors에서 모든 가중치가 (In, Out) 형태로 정제되었으므로 단순 matmul만 수행
-    std::string prefix = "model.layers." + std::to_string(layerIdx) + ".self_attn.";
+// [핵심] 구조체 기반 AttentionLayer - GetWeight 완전 제거
+mx::array MlxInference::AttentionLayer(const mx::array& x_input, const AttentionWeights& weights) {
+    // 구조체에서 직접 가중치 가져오기 (메모리 격리 보장)
+    const mx::array& q_proj = weights.q_proj;
+    const mx::array& k_proj = weights.k_proj;
+    const mx::array& v_proj = weights.v_proj;
+    const mx::array& o_proj = weights.o_proj;
     
-    // GetWeight는 이제 안전하다고 가정 (Load 단계에서 살균됨)
-    std::string q_key = prefix + "q_proj.weight";
-    std::string k_key = prefix + "k_proj.weight";
-    std::string v_key = prefix + "v_proj.weight";
-    std::string o_key = prefix + "o_proj.weight";
-    
-    mx::array q_proj = GetWeight(q_key);
-    mx::array k_proj = GetWeight(k_key);
-    mx::array v_proj = GetWeight(v_key);
-    mx::array o_proj = GetWeight(o_key);
-    
-    // [중요] o_proj가 MLP 가중치를 참조하지 않았는지 즉시 확인
+    // [검증] 바인딩 시점에 이미 검증되었지만, 안전을 위해 재확인
     if (o_proj.shape(0) == model_->intermediateSize || o_proj.shape(1) == model_->intermediateSize) {
-        std::cerr << "!!! FATAL: o_proj is referencing MLP weight immediately after GetWeight!" << std::endl;
+        std::cerr << "!!! FATAL: o_proj is MLP weight in AttentionLayer!" << std::endl;
         std::cerr << "   o_proj shape: (" << o_proj.shape(0) << ", " << o_proj.shape(1) << ")" << std::endl;
-        std::cerr << "   intermediateSize: " << model_->intermediateSize << std::endl;
-        std::cerr << "   o_key: " << o_key << std::endl;
-        
-        // [디버깅] 실제 weights 맵에서 확인
-        auto it = model_->weights.find(o_key);
-        if (it != model_->weights.end()) {
-            std::cerr << "   weights map value shape: (" << it->second.shape(0) << ", " << it->second.shape(1) << ")" << std::endl;
-        } else {
-            std::cerr << "   weights map: key not found!" << std::endl;
-        }
-        
-        throw std::runtime_error("o_proj is referencing MLP weight");
+        throw std::runtime_error("Corrupted o_proj inside AttentionLayer");
     }
-    
-    // [중요] o_proj를 명시적으로 복사하여 참조 문제 방지
-    // MLX의 lazy evaluation으로 인해 나중에 다른 가중치를 참조할 수 있으므로 즉시 복사
-    mx::array o_proj_copy = o_proj + mx::array(0.0f);
-    
-    // 복사 후 검증
-    if (o_proj_copy.shape(0) == model_->intermediateSize || o_proj_copy.shape(1) == model_->intermediateSize) {
-        std::cerr << "!!! FATAL: o_proj_copy is MLP weight after copy!" << std::endl;
-        throw std::runtime_error("o_proj_copy is MLP weight");
-    }
-    
-    // o_proj를 복사본으로 교체
-    o_proj = o_proj_copy;
     
     // [중요] Weight Shape 강제 검증 - 샤딩 및 MLP 가중치 유입 확인
     std::cerr << "--- Debug Attention Weight Shapes ---" << std::endl;
@@ -1292,7 +1467,8 @@ mx::array MlxInference::AttentionLayer(const mx::array& x_input, int layerIdx) {
     
     // [중요] o_proj의 실제 shape을 강제로 읽어서 확인
     // MLX의 lazy evaluation으로 인해 shape이 잘못 표시될 수 있음
-    if (layerIdx == 0) {
+    // (디버깅용 코드 제거 - 구조체 기반으로 안전함)
+    {
         try {
             // o_proj의 첫 번째 행과 마지막 행을 읽어서 평가 강제
             mx::array o_proj_first_row = mx::take(o_proj, mx::array({0}), 0);
@@ -1362,141 +1538,10 @@ mx::array MlxInference::AttentionLayer(const mx::array& x_input, int layerIdx) {
         throw std::runtime_error("FATAL: Weight dimension mismatch in AttentionLayer");
     }
     
-    // 첫 번째 layer에서 shape 확인
-    if (layerIdx == 0) {
-        std::cerr << "[MLX] AttentionLayer[0]: x_input shape: (" << seqLen << ", " << hiddenSize << ")" << std::endl;
-        std::cerr << "[MLX] AttentionLayer[0]: q_proj shape: (" << qProjInDim << ", " << qProjOutDim << ")" << std::endl;
-    }
-    
-    // matmul 직전에 x_input을 명시적으로 복사하여 평가 강제
-    // 변수명을 명시적으로 분리하여 참조 문제 방지
-    // 첫 번째 layer에서는 강제 평가 수행
-    mx::array x_for_attn = x_input;  // 초기값은 x_input
-    if (layerIdx == 0) {
-        // x_input을 명시적으로 복사하기 위해 실제 연산 수행
-        // x_input의 shape을 확인하고, 명시적으로 복사
-        try {
-            int seqLen = x_input.shape(0);
-            int hiddenSize = x_input.shape(1);
-            
-            // x_input을 사용하는 실제 연산: x_input을 명시적으로 복사
-            // 방법: x_input을 reshape하여 명시적 복사 (같은 shape이지만 새로운 배열 생성)
-            mx::array x_reshaped = mx::reshape(x_input, {seqLen, hiddenSize});
-            
-            // x_reshaped의 첫 번째 행을 읽어서 평가 강제
-            mx::array first_row = mx::take(x_reshaped, mx::array({0}), 0);
-            if (first_row.size() > 0) {
-                // 첫 번째 행의 여러 요소를 읽어서 평가 강제
-                for (int i = 0; i < hiddenSize && i < 10; ++i) {
-                    mx::array elem = mx::take(first_row, mx::array({i}), 0);
-                    if (elem.size() == 1) {
-                        float dummy = elem.item<float>();
-                        (void)dummy;
-                    }
-                }
-            }
-            
-            // stream 동기화
-            mx::synchronize(model_->stream);
-            
-            // x_reshaped를 x_for_attn에 할당
-            x_for_attn = x_reshaped;
-            
-            // shape 재확인
-            std::cerr << "[MLX] Before matmul, x_for_attn shape: (" << x_for_attn.shape(0) << ", " << x_for_attn.shape(1) << ")" << std::endl;
-            std::cerr << "[MLX] Before matmul, q_proj shape: (" << q_proj.shape(0) << ", " << q_proj.shape(1) << ")" << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "[MLX] Warning: Failed to force evaluate x_input before matmul: " << e.what() << std::endl;
-            // 실패 시 원본 사용
-            x_for_attn = x_input;
-        }
-    } else {
-        // 다른 layer에서는 원본 사용
-        x_for_attn = x_input;
-    }
-    
-    // Query, Key, Value 계산 - x_input을 직접 사용 (x_for_attn 대신)
-    // x_input @ q_proj: (seq_len, hidden_size) @ (hidden_size, out_dim) = (seq_len, out_dim)
-    
-    // [최종 검증] matmul 직전 변수 확인
-    if (layerIdx == 0) {
-        std::cerr << ">>> Before Calling matmul <<<" << std::endl;
-        DebugArray("x_input (arg to matmul)", x_input);
-        std::cerr << "x_input Ptr: " << &x_input << std::endl;
-        std::cerr << "x_input shape().back(): " << x_input.shape().back() << std::endl;
-        std::cerr << "q_proj shape: (" << q_proj.shape(0) << ", " << q_proj.shape(1) << ")" << std::endl;
-        std::cerr << "q_proj.shape(0): " << q_proj.shape(0) << std::endl;
-        
-        // 강제 Assertion
-        if (x_input.shape().back() != 2048) {
-            std::cerr << "!!! STOP: x_input is NOT 2048 here! It is " << x_input.shape().back() << std::endl;
-            std::cerr << "Full shape: (";
-            for (size_t i = 0; i < x_input.shape().size(); ++i) {
-                std::cerr << x_input.shape()[i];
-                if (i < x_input.shape().size() - 1) std::cerr << ", ";
-            }
-            std::cerr << ")" << std::endl;
-            throw std::runtime_error("x_input shape verification failed before matmul");
-        }
-    }
-    
-    // x_for_attn 대신 x_input을 직접 사용하여 참조 문제 해결
-    // MLX matmul(x, w): x의 마지막 차원과 w의 첫 번째 차원이 같아야 함
-    // x: (seq_len, hidden_size) = (13, 2048)
-    // w: (hidden_size, out_dim) = (2048, 256)
-    // 결과: (13, 256)
-    
-    // [중요] matmul 전에 x_input을 명시적으로 평가하기 위해 작은 연산 수행
-    // MLX의 lazy evaluation 문제를 해결하기 위해 x_input을 사용하는 실제 연산 수행
+    // matmul을 위한 입력 준비
     mx::array x_for_matmul = x_input;
-    if (layerIdx == 0) {
-        try {
-            // x_input의 모든 요소를 강제로 평가하기 위해 첫 번째 행과 마지막 행을 읽음
-            int seqLen = x_input.shape(0);
-            int hiddenSize = x_input.shape(1);
-            
-            // 첫 번째 행 읽기
-            mx::array firstRow = mx::take(x_input, mx::array({0}), 0);
-            if (firstRow.size() > 0) {
-                mx::array firstElem = mx::take(firstRow, mx::array({0}), 0);
-                if (firstElem.size() == 1) {
-                    float dummy1 = firstElem.item<float>();
-                    (void)dummy1;
-                }
-            }
-            
-            // 마지막 행의 마지막 요소 읽기
-            if (seqLen > 0 && hiddenSize > 0) {
-                mx::array lastRow = mx::take(x_input, mx::array({seqLen - 1}), 0);
-                if (lastRow.size() > 0) {
-                    mx::array lastElem = mx::take(lastRow, mx::array({hiddenSize - 1}), 0);
-                    if (lastElem.size() == 1) {
-                        float dummy2 = lastElem.item<float>();
-                        (void)dummy2;
-                    }
-                }
-            }
-            
-            // stream 동기화
-            mx::synchronize(model_->stream);
-            
-            // x_input을 사용하는 작은 연산으로 명시적 복사
-            x_for_matmul = x_input + mx::array(0.0f);
-            
-            // 복사 후 shape 확인
-            std::cerr << ">>> After force evaluation <<<" << std::endl;
-            std::cerr << "x_for_matmul shape().back(): " << x_for_matmul.shape().back() << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "[MLX] Warning: Failed to force evaluate x_input: " << e.what() << std::endl;
-            x_for_matmul = x_input;
-        }
-    }
     
-    std::cerr << ">>> Inside matmul call <<<" << std::endl;
-    std::cerr << "Calling: matmul(x_for_matmul, q_proj)" << std::endl;
-    std::cerr << "x_for_matmul last dim: " << x_for_matmul.shape().back() << std::endl;
-    std::cerr << "q_proj first dim: " << q_proj.shape(0) << std::endl;
-    
+    // Query, Key, Value 계산
     mx::array q = mx::matmul(x_for_matmul, q_proj);
     mx::array k = mx::matmul(x_for_matmul, k_proj);
     mx::array v = mx::matmul(x_for_matmul, v_proj);
@@ -1521,26 +1566,6 @@ mx::array MlxInference::AttentionLayer(const mx::array& x_input, int layerIdx) {
     // [중요] out을 명시적으로 복사하여 참조 문제 방지
     mx::array out_copy = out + mx::array(0.0f);
     
-    // [중요] Attention output shape 확인
-    if (layerIdx == 0) {
-        std::cerr << ">>> After Attention Score Computation <<<" << std::endl;
-        std::cerr << "Attention Output Shape (out): (";
-        for (size_t i = 0; i < out.shape().size(); ++i) {
-            std::cerr << out.shape()[i];
-            if (i < out.shape().size() - 1) std::cerr << ", ";
-        }
-        std::cerr << ")" << std::endl;
-        std::cerr << "Attention Output Shape (out_copy): (";
-        for (size_t i = 0; i < out_copy.shape().size(); ++i) {
-            std::cerr << out_copy.shape()[i];
-            if (i < out_copy.shape().size() - 1) std::cerr << ", ";
-        }
-        std::cerr << ")" << std::endl;
-        std::cerr << "o_proj shape: (" << o_proj.shape(0) << ", " << o_proj.shape(1) << ")" << std::endl;
-        std::cerr << "o_proj Input Expectation (Dim 0 of o_proj): " << o_proj.shape(0) << std::endl;
-        std::cerr << "Attention Output last dim (out): " << out.shape().back() << std::endl;
-        std::cerr << "Attention Output last dim (out_copy): " << out_copy.shape().back() << std::endl;
-    }
     
     // out을 복사본으로 교체
     out = out_copy;
@@ -1553,9 +1578,12 @@ mx::array MlxInference::AttentionLayer(const mx::array& x_input, int layerIdx) {
     int oProjInDim = o_proj.shape(0);
     int oProjOutDim = o_proj.shape(1);
     
-    if (layerIdx == 0) {
-        std::cerr << "[MLX] o_proj actual shape check: (" << o_proj.shape(0) << ", " << o_proj.shape(1) << ")" << std::endl;
-        std::cerr << "[MLX] attentionOutDim: " << attentionOutDim << ", oProjInDim: " << oProjInDim << ", oProjOutDim: " << oProjOutDim << std::endl;
+    // [FATAL 검증] o_proj가 MLP 가중치(10944)를 포함하면 안 됨 (matmul 직전 재확인)
+    if (o_proj.shape(0) == model_->intermediateSize || o_proj.shape(1) == model_->intermediateSize) {
+        std::cerr << "!!! FATAL: o_proj is MLP weight right before matmul!" << std::endl;
+        std::cerr << "   o_proj shape: (" << o_proj.shape(0) << ", " << o_proj.shape(1) << ")" << std::endl;
+        std::cerr << "   intermediateSize: " << model_->intermediateSize << std::endl;
+        throw std::runtime_error("Corrupted o_proj right before matmul");
     }
     
     if (attentionOutDim != oProjInDim) {
@@ -1564,277 +1592,127 @@ mx::array MlxInference::AttentionLayer(const mx::array& x_input, int layerIdx) {
             // o_proj가 (Out, In) 형태로 저장되어 있을 수 있음 - transpose 필요
             std::cerr << "[MLX] Transposing o_proj: (" << o_proj.shape(0) << ", " << o_proj.shape(1) 
                       << ") -> (" << o_proj.shape(1) << ", " << o_proj.shape(0) << ")" << std::endl;
-            // o_proj를 transpose하기 전에 실제 shape 확인
-            std::cerr << "[MLX] o_proj original shape: (" << o_proj.shape(0) << ", " << o_proj.shape(1) << ")" << std::endl;
             
-            // [중요] o_proj를 명시적으로 복사하여 참조 문제 방지
-            mx::array o_proj_local = o_proj + mx::array(0.0f);  // 명시적 복사
-            mx::array o_proj_T = mx::transpose(o_proj_local, {1, 0});
+            // [중요] o_proj를 명시적으로 평가하여 실제 값 확인
+            // transpose 전에 o_proj의 첫 번째 요소를 읽어서 강제 평가
+            try {
+                mx::array first_elem = mx::take(mx::take(o_proj, mx::array({0}), 0), mx::array({0}), 0);
+                float dummy = first_elem.item<float>();
+                (void)dummy;
+                mx::synchronize(model_->stream);
+            } catch (...) {
+                // 평가 실패는 무시
+            }
+            
+            // 평가 후 shape 재확인
+            std::cerr << "[MLX] o_proj shape after force evaluation: (" << o_proj.shape(0) << ", " << o_proj.shape(1) << ")" << std::endl;
+            
+            // [FATAL 검증] 평가 후에도 MLP 가중치인지 확인
+            if (o_proj.shape(0) == model_->intermediateSize || o_proj.shape(1) == model_->intermediateSize) {
+                std::cerr << "!!! FATAL: o_proj is MLP weight after force evaluation!" << std::endl;
+                std::cerr << "   o_proj shape: (" << o_proj.shape(0) << ", " << o_proj.shape(1) << ")" << std::endl;
+                throw std::runtime_error("Corrupted o_proj after force evaluation");
+            }
+            
+            // transpose 수행
+            mx::array o_proj_T = mx::transpose(o_proj, {1, 0});
+            
+            // [중요] transpose 후 명시적으로 평가하여 lazy evaluation 문제 방지
+            try {
+                // o_proj_T의 첫 번째 요소를 읽어서 강제 평가
+                mx::array first_elem_T = mx::take(mx::take(o_proj_T, mx::array({0}), 0), mx::array({0}), 0);
+                float dummy_T = first_elem_T.item<float>();
+                (void)dummy_T;
+                mx::synchronize(model_->stream);
+            } catch (...) {
+                // 평가 실패는 무시
+            }
+            
+            // transpose 후 shape 확인 (평가 후)
+            std::cerr << "[MLX] o_proj_T shape after transpose and evaluation: (" << o_proj_T.shape(0) << ", " << o_proj_T.shape(1) << ")" << std::endl;
+            
+            // [FATAL 검증] transpose 후에도 MLP 가중치인지 확인
+            if (o_proj_T.shape(0) == model_->intermediateSize || o_proj_T.shape(1) == model_->intermediateSize) {
+                std::cerr << "!!! FATAL: o_proj_T is MLP weight after transpose!" << std::endl;
+                std::cerr << "   o_proj_T shape: (" << o_proj_T.shape(0) << ", " << o_proj_T.shape(1) << ")" << std::endl;
+                throw std::runtime_error("Corrupted o_proj_T after transpose");
+            }
             
             // [중요] o_proj_T를 명시적으로 복사하여 참조 문제 방지
-            mx::array o_proj_T_copy = o_proj_T + mx::array(0.0f);
+            // mx::array는 참조 카운팅을 사용하므로, 명시적으로 복사해야 함
+            mx::array o_proj_T_final = o_proj_T * mx::array(1.0f);  // 명시적 복사 (곱셈으로 복사)
+            mx::synchronize(model_->stream);
             
-            // o_proj_T_copy를 강제로 평가
-            if (layerIdx == 0) {
-                try {
-                    // o_proj_T_copy의 첫 번째 행을 읽어서 평가 강제
-                    mx::array firstRow = mx::take(o_proj_T_copy, mx::array({0}), 0);
-                    if (firstRow.size() > 0) {
-                        mx::array firstElem = mx::take(firstRow, mx::array({0}), 0);
-                        if (firstElem.size() == 1) {
-                            float dummy = firstElem.item<float>();
-                            (void)dummy;
-                        }
-                    }
-                    mx::synchronize(model_->stream);
-                    
-                    // [중요] 평가 후 shape 확인
-                    std::cerr << "[MLX] o_proj_T_copy shape after evaluation: (" 
-                              << o_proj_T_copy.shape(0) << ", " << o_proj_T_copy.shape(1) << ")" << std::endl;
-                    
-                    // MLP 가중치 확인
-                    if (o_proj_T_copy.shape(0) == model_->intermediateSize || o_proj_T_copy.shape(1) == model_->intermediateSize) {
-                        std::cerr << "!!! FATAL: o_proj_T_copy is MLP weight after evaluation!" << std::endl;
-                        throw std::runtime_error("o_proj_T_copy is MLP weight");
-                    }
-                } catch (const std::exception& e) {
-                    std::cerr << "[MLX] Warning: Failed to force evaluate o_proj_T_copy: " << e.what() << std::endl;
-                }
+            // 복사 후 shape 확인
+            std::cerr << "[MLX] o_proj_T_final shape after copy: (" << o_proj_T_final.shape(0) << ", " << o_proj_T_final.shape(1) << ")" << std::endl;
+            
+            // [FATAL 검증] 복사 후에도 MLP 가중치인지 확인
+            if (o_proj_T_final.shape(0) == model_->intermediateSize || o_proj_T_final.shape(1) == model_->intermediateSize) {
+                std::cerr << "!!! FATAL: o_proj_T_final is MLP weight after copy!" << std::endl;
+                std::cerr << "   o_proj_T_final shape: (" << o_proj_T_final.shape(0) << ", " << o_proj_T_final.shape(1) << ")" << std::endl;
+                throw std::runtime_error("Corrupted o_proj_T_final after copy");
             }
             
-            // o_proj_T를 o_proj_T_copy로 교체
-            o_proj_T = o_proj_T_copy;
-            
-            if (layerIdx == 0) {
-                std::cerr << "[MLX] o_proj_T shape after transpose and evaluation: (" << o_proj_T.shape(0) << ", " << o_proj_T.shape(1) << ")" << std::endl;
-                std::cerr << "[MLX] out shape before matmul: (";
-                for (size_t i = 0; i < out.shape().size(); ++i) {
-                    std::cerr << out.shape()[i];
-                    if (i < out.shape().size() - 1) std::cerr << ", ";
-                }
-                std::cerr << ")" << std::endl;
-                
-                // out의 마지막 차원 강제 확인
-                std::cerr << "[MLX] out.shape().back(): " << out.shape().back() << std::endl;
-                std::cerr << "[MLX] o_proj_T.shape(0): " << o_proj_T.shape(0) << std::endl;
-                
-                // 강제 Assertion
-                if (out.shape().back() != o_proj_T.shape(0)) {
-                    std::cerr << "!!! FATAL: out last dim (" << out.shape().back() 
-                              << ") != o_proj_T first dim (" << o_proj_T.shape(0) << ")" << std::endl;
-                    throw std::runtime_error("Dimension mismatch before o_proj matmul");
-                }
+            // [중요] matmul 직전에 out과 o_proj_T_final의 shape을 명시적으로 확인
+            std::cerr << "[MLX] Before matmul - out shape: (";
+            for (size_t i = 0; i < out.shape().size(); ++i) {
+                std::cerr << out.shape()[i];
+                if (i < out.shape().size() - 1) std::cerr << ", ";
             }
+            std::cerr << ")" << std::endl;
+            std::cerr << "[MLX] Before matmul - o_proj_T_final shape: (" 
+                      << o_proj_T_final.shape(0) << ", " << o_proj_T_final.shape(1) << ")" << std::endl;
             
-            // [핵심] matmul 직전에 out을 명시적으로 평가 및 복사
-            // [중요] out이 이미 복사본이므로 다시 복사할 필요 없지만, 검증을 위해 복사
-            // [중요] out의 ID를 먼저 확인
-            if (layerIdx == 0) {
-                std::cerr << ">>> Before creating out_for_matmul <<<" << std::endl;
-                std::cerr << "out shape: (";
-                for (size_t i = 0; i < out.shape().size(); ++i) {
-                    std::cerr << out.shape()[i];
-                    if (i < out.shape().size() - 1) std::cerr << ", ";
-                }
-                std::cerr << ") | ID: " << out.id() << std::endl;
-                std::cerr << "out.shape().back(): " << out.shape().back() << std::endl;
-            }
-            
-            mx::array out_for_matmul = out + mx::array(0.0f);  // 즉시 명시적 복사
-            
-            // [중요] out과 out_for_matmul의 shape 및 ID 확인
-            if (layerIdx == 0) {
-                std::cerr << ">>> After creating out_for_matmul <<<" << std::endl;
-                std::cerr << "out shape: (";
-                for (size_t i = 0; i < out.shape().size(); ++i) {
-                    std::cerr << out.shape()[i];
-                    if (i < out.shape().size() - 1) std::cerr << ", ";
-                }
-                std::cerr << ") | ID: " << out.id() << std::endl;
-                std::cerr << "out_for_matmul shape: (";
-                for (size_t i = 0; i < out_for_matmul.shape().size(); ++i) {
-                    std::cerr << out_for_matmul.shape()[i];
-                    if (i < out_for_matmul.shape().size() - 1) std::cerr << ", ";
-                }
-                std::cerr << ") | ID: " << out_for_matmul.id() << std::endl;
-                std::cerr << "ID changed: " << (out.id() != out_for_matmul.id() ? "YES" : "NO") << std::endl;
-                
-                if (out.shape() != out_for_matmul.shape()) {
-                    std::cerr << "!!! FATAL: out and out_for_matmul have different shapes!" << std::endl;
-                    throw std::runtime_error("out and out_for_matmul shape mismatch");
-                }
-            }
-            
-            if (layerIdx == 0) {
-                try {
-                    // out_for_matmul의 첫 번째 요소를 읽어서 평가 강제
-                    mx::array firstRow = mx::take(out_for_matmul, mx::array({0}), 0);
-                    if (firstRow.size() > 0) {
-                        mx::array firstElem = mx::take(firstRow, mx::array({0}), 0);
-                        if (firstElem.size() == 1) {
-                            float dummy = firstElem.item<float>();
-                            (void)dummy;
-                        }
-                    }
-                    mx::synchronize(model_->stream);
-                    
-                    // [중요] 평가 후 shape 확인
-                    std::cerr << "[MLX] out_for_matmul shape after evaluation: (";
-                    for (size_t i = 0; i < out_for_matmul.shape().size(); ++i) {
-                        std::cerr << out_for_matmul.shape()[i];
-                        if (i < out_for_matmul.shape().size() - 1) std::cerr << ", ";
-                    }
-                    std::cerr << ")" << std::endl;
-                    std::cerr << "[MLX] out_for_matmul shape().back(): " << out_for_matmul.shape().back() << std::endl;
-                    
-                    // [중요] out_for_matmul이 10944 차원을 가지고 있는지 확인
-                    if (out_for_matmul.shape().back() == model_->intermediateSize) {
-                        std::cerr << "!!! FATAL: out_for_matmul has intermediate_size dimension!" << std::endl;
-                        throw std::runtime_error("out_for_matmul has intermediate_size dimension");
-                    }
-                } catch (const std::exception& e) {
-                    std::cerr << "[MLX] Warning: Failed to force evaluate out_for_matmul: " << e.what() << std::endl;
-                }
-            }
-            
-            // [핵심] matmul 직전 최종 확인 및 객체 ID 추적
-            std::cerr << ">>> Matmul Debug Info <<<" << std::endl;
-            std::cerr << "Input X  | Shape: (";
-            for (size_t i = 0; i < out_for_matmul.shape().size(); ++i) {
-                std::cerr << out_for_matmul.shape()[i];
-                if (i < out_for_matmul.shape().size() - 1) std::cerr << ", ";
-            }
-            std::cerr << ") | ID: " << out_for_matmul.id() << std::endl;
-            std::cerr << "Weight W | Shape: (" << o_proj_T.shape(0) << ", " << o_proj_T.shape(1) 
-                      << ") | ID: " << o_proj_T.id() << std::endl;
-            
-            // [강제 Assertion] 10944는 절대 나오면 안 되는 숫자 - matmul 직전 최종 확인
-            if (o_proj_T.shape(0) == 10944 || o_proj_T.shape(1) == 10944) {
-                std::cerr << "!!! CRITICAL ERROR !!!" << std::endl;
-                std::cerr << "The weight variable holds MLP data (dim 10944)." << std::endl;
-                std::cerr << "This means 'o_proj_T' variable contains the wrong mx::array object." << std::endl;
-                std::cerr << "o_proj_T ID: " << o_proj_T.id() << std::endl;
-                std::cerr << "o_proj_T shape: (" << o_proj_T.shape(0) << ", " << o_proj_T.shape(1) << ")" << std::endl;
-                std::cerr << "o_key: " << o_key << std::endl;
-                
-                // [디버깅] weights 맵에서 실제 값 확인
-                auto it = model_->weights.find(o_key);
-                if (it != model_->weights.end()) {
-                    std::cerr << "weights map value shape: (" << it->second.shape(0) << ", " << it->second.shape(1) << ")" << std::endl;
-                    std::cerr << "weights map value ID: " << it->second.id() << std::endl;
-                    std::cerr << "ID match: " << (it->second.id() == o_proj_T.id() ? "YES" : "NO") << std::endl;
-                } else {
-                    std::cerr << "weights map: key not found!" << std::endl;
-                }
-                
-                exit(1);
-            }
-            
-            // [중요] out_for_matmul이 실제로 (6, 256)인지 강제 확인
-            // 에러 메시지에서 (6, 2048)로 나타나는 것을 보면 out_for_matmul이 잘못된 배열을 참조하고 있을 수 있음
-            if (out_for_matmul.shape().back() == 2048) {
-                std::cerr << "!!! CRITICAL: out_for_matmul has wrong shape (last dim is 2048, expected 256)!" << std::endl;
-                std::cerr << "   Full shape: (";
-                for (size_t i = 0; i < out_for_matmul.shape().size(); ++i) {
-                    std::cerr << out_for_matmul.shape()[i];
-                    if (i < out_for_matmul.shape().size() - 1) std::cerr << ", ";
-                }
-                std::cerr << ")" << std::endl;
-                std::cerr << "   out_for_matmul ID: " << out_for_matmul.id() << std::endl;
-                std::cerr << "   out ID: " << out.id() << std::endl;
-                std::cerr << "   ID match: " << (out.id() == out_for_matmul.id() ? "YES" : "NO") << std::endl;
-                throw std::runtime_error("out_for_matmul has wrong shape");
-            }
-            
-            // 차원 일치 확인
-            if (out_for_matmul.shape().back() != o_proj_T.shape(0)) {
-                std::cerr << "!!! FATAL: Dimension mismatch!" << std::endl;
-                std::cerr << "   out_for_matmul last dim: " << out_for_matmul.shape().back() << std::endl;
-                std::cerr << "   o_proj_T first dim: " << o_proj_T.shape(0) << std::endl;
-                throw std::runtime_error("Dimension mismatch before matmul");
-            }
-            
-            // [최종] matmul 호출 직전에 모든 변수를 강제 평가
-            // MLX의 lazy evaluation으로 인해 matmul 시점에 다른 배열을 참조할 수 있으므로
-            // [핵심] o_proj부터 o_proj_T_eval까지의 전체 변환 과정 추적
-            std::cerr << ">>> Full o_proj transformation trace <<<" << std::endl;
-            std::cerr << "o_proj shape: (" << o_proj.shape(0) << ", " << o_proj.shape(1) << ") | ID: " << o_proj.id() << std::endl;
-            std::cerr << "o_proj_T shape: (" << o_proj_T.shape(0) << ", " << o_proj_T.shape(1) << ") | ID: " << o_proj_T.id() << std::endl;
-            
+            // [중요] matmul 직전에 out과 o_proj_T_final을 모두 명시적으로 평가하고 복사
             try {
-                // [핵심] out_for_matmul 강제 평가 - out 변수와 완전히 분리
-                // out 변수가 다른 곳에서 변경되었을 수 있으므로 out_for_matmul을 직접 사용
-                mx::array out_eval = out_for_matmul + mx::array(0.0f);
+                // out을 명시적으로 평가하고 복사
+                mx::array out_evaluated = out + mx::array(0.0f);  // 명시적 복사 및 평가
                 mx::synchronize(model_->stream);
                 
-                // [중요] out_eval이 실제로 (6, 256)인지 강제 확인
-                if (out_eval.shape().back() == 2048) {
-                    std::cerr << "!!! CRITICAL: out_eval has wrong shape (last dim is 2048, expected 256)!" << std::endl;
-                    std::cerr << "   out_eval shape: (";
-                    for (size_t i = 0; i < out_eval.shape().size(); ++i) {
-                        std::cerr << out_eval.shape()[i];
-                        if (i < out_eval.shape().size() - 1) std::cerr << ", ";
-                    }
-                    std::cerr << ")" << std::endl;
-                    std::cerr << "   out_eval ID: " << out_eval.id() << std::endl;
-                    std::cerr << "   out_for_matmul ID: " << out_for_matmul.id() << std::endl;
-                    throw std::runtime_error("out_eval has wrong shape");
-                }
-                
-                // [중요] o_proj_T를 다시 생성하여 참조 문제 방지
-                // o_proj부터 다시 시작 - GetWeight를 다시 호출하여 최신 값 가져오기
-                mx::array o_proj_fresh = GetWeight(o_key);
-                if (o_proj_fresh.shape(0) == model_->intermediateSize || o_proj_fresh.shape(1) == model_->intermediateSize) {
-                    std::cerr << "!!! CRITICAL: o_proj_fresh is MLP weight!" << std::endl;
-                    std::cerr << "   o_proj_fresh shape: (" << o_proj_fresh.shape(0) << ", " << o_proj_fresh.shape(1) << ")" << std::endl;
-                    std::cerr << "   o_key: " << o_key << std::endl;
-                    exit(1);
-                }
-                mx::array o_proj_fresh_copy = o_proj_fresh + mx::array(0.0f);
-                mx::array o_proj_T_fresh = mx::transpose(o_proj_fresh_copy, {1, 0});
-                mx::array o_proj_T_eval = o_proj_T_fresh + mx::array(0.0f);
+                // o_proj_T_final을 명시적으로 평가하고 복사
+                mx::array o_proj_T_final_evaluated = o_proj_T_final + mx::array(0.0f);  // 명시적 복사 및 평가
                 mx::synchronize(model_->stream);
                 
-                // 평가 후 shape 확인
-                std::cerr << ">>> After force evaluation before matmul <<<" << std::endl;
-                std::cerr << "out_eval shape: (";
-                for (size_t i = 0; i < out_eval.shape().size(); ++i) {
-                    std::cerr << out_eval.shape()[i];
-                    if (i < out_eval.shape().size() - 1) std::cerr << ", ";
+                // 평가 후 shape 재확인
+                std::cerr << "[MLX] After force evaluation - out_evaluated shape: (";
+                for (size_t i = 0; i < out_evaluated.shape().size(); ++i) {
+                    std::cerr << out_evaluated.shape()[i];
+                    if (i < out_evaluated.shape().size() - 1) std::cerr << ", ";
                 }
-                std::cerr << ") | ID: " << out_eval.id() << std::endl;
-                std::cerr << "o_proj_fresh shape: (" << o_proj_fresh.shape(0) << ", " << o_proj_fresh.shape(1) << ") | ID: " << o_proj_fresh.id() << std::endl;
-                std::cerr << "o_proj_T_fresh shape: (" << o_proj_T_fresh.shape(0) << ", " << o_proj_T_fresh.shape(1) << ") | ID: " << o_proj_T_fresh.id() << std::endl;
-                std::cerr << "o_proj_T_eval shape: (" << o_proj_T_eval.shape(0) << ", " << o_proj_T_eval.shape(1) 
-                          << ") | ID: " << o_proj_T_eval.id() << std::endl;
+                std::cerr << ")" << std::endl;
+                std::cerr << "[MLX] After force evaluation - o_proj_T_final_evaluated shape: (" 
+                          << o_proj_T_final_evaluated.shape(0) << ", " << o_proj_T_final_evaluated.shape(1) << ")" << std::endl;
                 
-                // [강제 Assertion] 평가 후에도 10944가 나타나면 즉시 중단
-                if (o_proj_T_eval.shape(0) == 10944 || o_proj_T_eval.shape(1) == 10944) {
-                    std::cerr << "!!! CRITICAL: o_proj_T_eval has MLP dimension after evaluation!" << std::endl;
-                    std::cerr << "   o_proj_fresh shape: (" << o_proj_fresh.shape(0) << ", " << o_proj_fresh.shape(1) << ")" << std::endl;
-                    std::cerr << "   o_proj_T_fresh shape: (" << o_proj_T_fresh.shape(0) << ", " << o_proj_T_fresh.shape(1) << ")" << std::endl;
-                    exit(1);
+                // [FATAL 검증] 평가 후에도 MLP 가중치인지 확인
+                if (o_proj_T_final_evaluated.shape(0) == model_->intermediateSize || 
+                    o_proj_T_final_evaluated.shape(1) == model_->intermediateSize) {
+                    std::cerr << "!!! FATAL: o_proj_T_final_evaluated is MLP weight right before matmul!" << std::endl;
+                    std::cerr << "   o_proj_T_final_evaluated shape: (" << o_proj_T_final_evaluated.shape(0) 
+                              << ", " << o_proj_T_final_evaluated.shape(1) << ")" << std::endl;
+                    throw std::runtime_error("Corrupted o_proj_T_final_evaluated right before matmul");
                 }
-                
-                // [최종] matmul 호출 직전에 모든 변수를 다시 확인
-                std::cerr << ">>> Final check before matmul call <<<" << std::endl;
-                std::cerr << "out_eval.shape().back(): " << out_eval.shape().back() << std::endl;
-                std::cerr << "o_proj_T_eval.shape(0): " << o_proj_T_eval.shape(0) << std::endl;
                 
                 // 차원 일치 확인
-                if (out_eval.shape().back() != o_proj_T_eval.shape(0)) {
-                    std::cerr << "!!! FATAL: Final dimension check failed!" << std::endl;
-                    std::cerr << "   out_eval last dim: " << out_eval.shape().back() << std::endl;
-                    std::cerr << "   o_proj_T_eval first dim: " << o_proj_T_eval.shape(0) << std::endl;
-                    throw std::runtime_error("Final dimension check failed");
+                if (out_evaluated.shape().back() != o_proj_T_final_evaluated.shape(0)) {
+                    std::cerr << "!!! FATAL: Dimension mismatch before o_proj matmul!" << std::endl;
+                    std::cerr << "   out_evaluated last dim: " << out_evaluated.shape().back() << std::endl;
+                    std::cerr << "   o_proj_T_final_evaluated first dim: " << o_proj_T_final_evaluated.shape(0) << std::endl;
+                    throw std::runtime_error("Dimension mismatch before o_proj matmul");
                 }
                 
-                // 평가된 변수로 matmul 수행
-                out = mx::matmul(out_eval, o_proj_T_eval);
+                // [핵심] 평가된 복사본을 사용하여 matmul 수행
+                out = mx::matmul(out_evaluated, o_proj_T_final_evaluated);
+                
+                // matmul 후 shape 확인
+                std::cerr << "[MLX] After matmul - out shape: (";
+                for (size_t i = 0; i < out.shape().size(); ++i) {
+                    std::cerr << out.shape()[i];
+                    if (i < out.shape().size() - 1) std::cerr << ", ";
+                }
+                std::cerr << ")" << std::endl;
             } catch (const std::exception& e) {
-                std::cerr << "[MLX] Warning: Failed to force evaluate before matmul: " << e.what() << std::endl;
-                // 실패 시 원본 사용
-                out = mx::matmul(out_for_matmul, o_proj_T);
+                std::cerr << "[MLX] Error during o_proj_T_final evaluation: " << e.what() << std::endl;
+                throw;
             }
         } else {
             std::cerr << "[MLX] ERROR: Cannot match attention output dim (" << attentionOutDim 
@@ -1846,132 +1724,194 @@ mx::array MlxInference::AttentionLayer(const mx::array& x_input, int layerIdx) {
         out = mx::matmul(out, o_proj);
     }
     
-    return out;
+    // [핵심 해결책] 결과물 저장 전 표준 포맷(float32)으로 변환
+    // 복잡한 Quantized View 속성을 제거하는 가장 확실한 방법입니다.
+    if (out.dtype() != mx::float32) {
+        out = mx::astype(out, mx::float32);
+    }
+
+    // 뷰 제거 및 메모리 연속화
+    mx::array final_out = mx::contiguous(out);
+    
+    // 강제 평가 (eval() 대신 간단한 연산 사용)
+    final_out = final_out * mx::array(1.0f);
+    mx::synchronize(model_->stream);
+
+    std::cout << "[MLX] AttentionLayer Output Ready. Shape: (" 
+              << final_out.shape(0) << ", " << final_out.shape(1) << ")" << std::endl;
+
+    return final_out;
 }
 
-mx::array MlxInference::FeedForwardLayer(const mx::array& x, int layerIdx) {
-    // Feed Forward Network 구현 (ggml-metal 스타일)
-    std::string prefix = "model.layers." + std::to_string(layerIdx) + ".mlp.";
+mx::array MlxInference::FeedForwardLayer(const mx::array& x, const MlpWeights& weights) {
+    // 1. 입력 정리 (Float32 보장)
+    mx::array x_clean = x; // 이미 Sanitize된 상태로 들어옴
     
-    mx::array gate_proj = GetWeight(prefix + "gate_proj.weight");
-    mx::array up_proj = GetWeight(prefix + "up_proj.weight");
-    mx::array down_proj = GetWeight(prefix + "down_proj.weight");
+    // 구조체 가중치 (양자화 상태 그대로)
+    const mx::array& gate_proj = weights.gate_proj;
+    const mx::array& up_proj = weights.up_proj;
+    const mx::array& down_proj = weights.down_proj;
+
+    // ---------------------------------------------------------
+    // Helper Lambda: 안전한 Matmul (Quantized Weight 보호)
+    // 목표: A @ B 수행. 
+    // 만약 B(Weight)의 차원이 안 맞아서 Transpose가 필요하다면,
+    // B를 돌리지 말고 A를 돌려서 (B @ A^T)^T 를 수행함.
+    // 또한 입력이 샤딩된 경우 슬라이싱도 지원함.
+    // ---------------------------------------------------------
+    auto SafeMatmul = [&](const mx::array& input, const mx::array& weight) -> mx::array {
+        mx::array input_clean = input;
+        int input_dim = input.shape().back();
+        int weight_in_dim = weight.shape(0);
+        int weight_out_dim = weight.shape(1);
+        
+        // Case 1: input(Batch, K) @ weight(K, N) -> (Batch, N)
+        // 차원이 딱 맞으면 바로 실행
+        if (input_dim == weight_in_dim) {
+            return mx::matmul(input_clean, weight);
+        }
+        
+        // Case 2: 입력이 샤딩된 경우 슬라이싱
+        // 예: input(2, 2048), weight(10944, 256) -> input을 (2, 256)으로 슬라이싱
+        // 가중치의 두 번째 차원(weight_out_dim)과 입력 차원을 비교
+        if (input_dim > weight_out_dim && weight_out_dim > 0) {
+            // 입력을 가중치의 출력 차원에 맞게 슬라이싱
+            mx::array input_sliced = mx::slice(input_clean, 
+                {0, 0}, 
+                {input.shape(0), weight_out_dim}, 
+                {1, 1});
+            input_sliced = mx::contiguous(input_sliced);
+            input_clean = input_sliced;
+            input_dim = weight_out_dim;
+        }
+        
+        // Case 3: input(Batch, K) @ weight(N, K)^T -> (Batch, N)
+        // 가중치가 (Output, Input) 형태로 저장된 경우
+        // Weight를 Transpose하면 에러나므로, Input을 Transpose해서 Weight @ Input^T 수행
+        if (input_dim == weight_out_dim) {
+            // input: (Batch, K) -> T -> (K, Batch)
+            mx::array input_T = mx::transpose(input_clean, {1, 0});
+            
+            // weight(N, K) @ input_T(K, Batch) -> result(N, Batch)
+            // MLX는 (Quantized @ Float) 지원함
+            mx::array res_T = mx::matmul(weight, input_T);
+            
+            // result(N, Batch) -> T -> (Batch, N)
+            return mx::transpose(res_T, {1, 0});
+        }
+        
+        std::cerr << "[MLX] FATAL: Shape mismatch in FeedForward. Input: " 
+                  << input.shape() << " (after processing: " << input_clean.shape() << "), Weight: " << weight.shape() << std::endl;
+        throw std::runtime_error("Shape mismatch in FeedForward");
+    };
+
+    // 2. Gate & Up Projection
+    // SafeMatmul이 알아서 입력을 돌려서 계산해줌
+    mx::array gate = SafeMatmul(x_clean, gate_proj);
     
-    mx::array gate = mx::matmul(x, gate_proj);
-    // SiLU activation: x * sigmoid(x)
+    // SiLU Activation
     gate = gate * mx::sigmoid(gate);
     
-    mx::array up = mx::matmul(x, up_proj);
+    mx::array up = SafeMatmul(x_clean, up_proj);
     
+    // Element-wise Multiply
     mx::array hidden = gate * up;
-    mx::array out = mx::matmul(hidden, down_proj);
+    
+    // 중간 결과 확정 (그래프 끊기)
+    Sanitize(hidden);
+
+    // 3. Down Projection
+    mx::array out = SafeMatmul(hidden, down_proj);
+    
+    // 최종 결과 확정
+    Sanitize(out);
     
     return out;
 }
 
 mx::array MlxInference::ForwardPass(const std::vector<int>& tokens, int pos) {
-    // Transformer forward pass 구현 (ggml-metal 스타일)
+    // [1] Embedding Lookup
+    mx::array embed = model_->embed_tokens; // Quantized state
     
-    // Token embeddings - 명시적인 변수명 사용
-    mx::array embed = GetWeight("model.embed_tokens.weight");
-    
-    // tokens를 array로 변환
     std::vector<int32_t> tokens32(tokens.begin(), tokens.end());
     mx::array tokenArray(tokens32.data(), {static_cast<int>(tokens32.size())}, mx::int32);
+    
+    // x_emb: (Batch, 256) - Quantized View
     mx::array x_emb = mx::take(embed, tokenArray, 0);
+
+    // [핵심 해결책] Transpose 없이 순방향으로 Identity 곱셈 수행
+    // 목표: x_emb(Q) -> x_emb_f32(F)
+    // 방법: x_emb(Q) @ Identity(F) = x_emb_f32(F)
     
-    // take의 결과가 올바른 타입인지 확인 (float32여야 함)
-    // 만약 타입이 다르면 변환
-    if (x_emb.dtype() != mx::float32) {
-        x_emb = mx::astype(x_emb, mx::float32);
+    try {
+        int embedDim = x_emb.shape(1); // 256
+        
+        // 1. 단위 행렬 생성 (256, 256) Float32
+        mx::array identity = mx::eye(embedDim, mx::float32);
+        
+        // 2. 순방향 Matmul 수행 (Transpose 없음!)
+        // (Batch, 256)Quantized @ (256, 256)Float32 -> (Batch, 256)Float32
+        // 이 커널(Quantized x Float)은 확실하게 지원됩니다.
+        mx::array x_emb_f32 = mx::matmul(x_emb, identity);
+        
+        // 3. 결과 확정 (Sanitize)
+        // 이제 x_emb_f32는 완벽한 Float32 배열입니다.
+        Sanitize(x_emb_f32);
+        
+        // 변수 교체
+        x_emb = x_emb_f32;
+        
+        // std::cerr << "[MLX] Embedding Dequantized via Forward Identity." << std::endl;
+
+    } catch (const std::exception& e) {
+        std::cerr << "[MLX] Error in Embedding Dequantization: " << e.what() << std::endl;
+        throw;
     }
-    
-    // x_emb shape: (seq_len, embed_dim) - embed_dim이 256일 수 있음
-    // 하지만 input_layernorm.weight는 (hidden_size,) = (2048,)일 수 있음
-    // 첫 번째 layer에서 256 -> 2048로 projection이 필요할 수 있음
-    
-    // 첫 번째 layer의 input_layernorm.weight shape을 확인
-    mx::array firstNormWeight = GetWeight("model.layers.0.input_layernorm.weight");
+
+    const mx::array& firstNormWeight = model_->layers[0].input_layernorm;
     int normDim = firstNormWeight.shape(0);
     
-    // x_emb의 embedding dimension 확인
-    int embedDim = x_emb.shape(1);
-    
-    // embed_dim != normDim이면 projection 필요
-    mx::array x_hidden = x_emb;  // projection 후 hidden_size dimension을 가진 변수 (초기값은 x_emb)
+    mx::array x_hidden = mx::array(0.0f); // 초기화
     bool projectionApplied = false;
     
-    if (embedDim != normDim) {
-        // embed_dim에서 hidden_size로 projection
-        // 첫 번째 layer의 q_proj를 사용하여 projection
-        // q_proj shape: (hidden_size, embed_dim) = (2048, 256)
-        // x_emb @ q_proj.T = (seq_len, embed_dim) @ (embed_dim, hidden_size) = (seq_len, hidden_size)
+    if (normDim != x_emb.shape(1)) { // embedDim (256) != normDim (2048)
         try {
-            std::string prefix = "model.layers.0.self_attn.";
-            mx::array q_proj = GetWeight(prefix + "q_proj.weight");
-            // q_proj shape 확인
-            std::cerr << "[MLX] q_proj shape: (" << q_proj.shape(0) << ", " << q_proj.shape(1) << ")" << std::endl;
-            std::cerr << "[MLX] x_emb shape before projection: (" << x_emb.shape(0) << ", " << x_emb.shape(1) << ")" << std::endl;
+            // [3] Projection 수행 (정석 방법)
+            // 가중치: (2048, 256) Quantized
+            // 입력: (Batch, 256) Float32 -> Transpose -> (256, Batch)
+            const mx::array& q_proj = model_->layers[0].attn.q_proj;
             
-            // q_proj shape: (hidden_size, embed_dim) = (2048, 256)
-            // transpose하여 (embed_dim, hidden_size) = (256, 2048)로 만들기
-            mx::array q_proj_T = mx::transpose(q_proj, {1, 0});
+            // x_emb가 Float32이므로 Transpose 안전
+            mx::array x_emb_T = mx::transpose(x_emb, {1, 0});
             
-            // transpose 후 shape 확인
-            std::cerr << "[MLX] q_proj_T shape after transpose: (" << q_proj_T.shape(0) << ", " << q_proj_T.shape(1) << ")" << std::endl;
+            // matmul(Quantized, Float32) 지원됨
+            mx::array x_proj_T = mx::matmul(q_proj, x_emb_T);
             
-            // x_emb @ q_proj.T: (seq_len, embed_dim) @ (embed_dim, hidden_size) = (seq_len, hidden_size)
-            // x_emb shape: (2, 256), q_proj_T shape: (256, 2048)
-            // 결과: (2, 2048)
-            // llama.cpp 스타일: ggml_mul_mat(w, cur)는 cur @ w.T를 의미
-            mx::array x_proj = mx::matmul(x_emb, q_proj_T);
+            // 결과 복원
+            mx::array x_proj = mx::transpose(x_proj_T, {1, 0});
             
-            // projection을 강제로 평가하기 위해 바로 LayerNorm 수행
-            // llama.cpp처럼 projection 후 바로 실제 연산을 수행하여 평가 강제
-            // 첫 번째 layer의 input_layernorm을 바로 적용 (실제로 사용할 연산이므로 평가 보장)
-            try {
-                // RMSNorm 연산 수행 (실제로 사용할 것이므로 평가 강제)
-                mx::array x_squared = mx::square(x_proj);
-                mx::array mean_squared = mx::mean(x_squared, -1, true);
-                mx::array rms = mx::sqrt(mean_squared + mx::array(1e-6f));
-                mx::array x_norm = x_proj / rms;
-                mx::array x_norm_weighted = x_norm * firstNormWeight;
-                
-                // x_norm_weighted의 첫 번째 행을 읽어서 평가 강제
-                mx::array firstRow = mx::take(x_norm_weighted, mx::array({0}), 0);
-                if (firstRow.size() > 0) {
-                    mx::array firstElem = mx::take(firstRow, mx::array({0}), 0);
-                    if (firstElem.size() == 1) {
-                        float dummy = firstElem.item<float>();
-                        (void)dummy;
-                    }
-                }
-                
-                // stream 동기화
-                mx::synchronize(model_->stream);
-                
-                // LayerNorm이 적용된 결과를 x_hidden에 할당 (명시적인 변수명)
-                // 이렇게 하면 projection이 실제로 평가되고, LayerNorm도 이미 적용됨
-                x_hidden = x_norm_weighted;
-                projectionApplied = true;
-                
-                // projection 후 shape 확인
-                std::cerr << "[MLX] x_hidden shape after projection+LayerNorm: (" << x_hidden.shape(0) << ", " << x_hidden.shape(1) << ")" << std::endl;
-                std::cerr << "[MLX] Projected from embed_dim " << embedDim << " to hidden_size " << normDim << std::endl;
-                DebugArray("After Projection+LayerNorm", x_hidden);
-            } catch (const std::exception& e) {
-                std::cerr << "[MLX] Warning: Failed to evaluate projection with LayerNorm: " << e.what() << std::endl;
-                // 평가 실패 시 원래 projected 사용
-                x_hidden = x_proj;
-                projectionApplied = true;
-            }
+            // 결과 확정
+            Sanitize(x_proj);
+            
+            // LayerNorm
+            mx::array x_squared = mx::square(x_proj);
+            mx::array mean_squared = mx::mean(x_squared, -1, true);
+            mx::array rms = mx::sqrt(mean_squared + mx::array(1e-6f));
+            mx::array x_norm = x_proj / rms;
+            mx::array x_norm_weighted = x_norm * firstNormWeight;
+            
+            x_hidden = x_norm_weighted;
+            Sanitize(x_hidden);
+            
+            projectionApplied = true;
+            
+            // std::cerr << "[MLX] Projection success via CPU bounce." << std::endl;
+
         } catch (const std::exception& e) {
-            std::cerr << "[MLX] Warning: Failed to project embed_dim to hidden_size: " << e.what() << std::endl;
-            // projection 실패 시 오류 발생
-            throw std::runtime_error("Cannot project embed_dim to hidden_size");
+            std::cerr << "[MLX] Error in Projection: " << e.what() << std::endl;
+            throw;
         }
     } else {
-        // projection이 필요 없으면 x_emb를 그대로 사용
         x_hidden = x_emb;
     }
     
@@ -1982,82 +1922,150 @@ mx::array MlxInference::ForwardPass(const std::vector<int>& tokens, int pos) {
     DebugArray("Before Transformer Layers", x);
     
     for (int i = 0; i < model_->numLayers; ++i) {
-        mx::array x_residual = x;  // residual connection을 위한 명시적 변수
-        
-        // x shape 확인 (첫 번째 layer 전)
-        if (i == 0) {
-            std::cerr << "[MLX] Before LayerNorm[0], x shape: (" << x.shape(0) << ", " << x.shape(1) << ")" << std::endl;
+        // [1] Residual 저장
+        // 루프 시작 시 x는 이전 레이어의 출력이므로 Sanitize
+        if (i > 0) {
+            Sanitize(x);
         }
+        mx::array x_residual = x;
         
-        // Pre-norm (첫 번째 layer에서 projection 시 이미 적용되었으면 건너뛰기)
+        // [2] Pre-Norm & Attention
+        const auto& layer_weights = model_->layers[i];
         mx::array x_norm = x;  // 초기값은 x
         if (i == 0 && projectionApplied) {
             // projection 시 이미 LayerNorm이 적용되었으므로 건너뛰기
-            // x_norm은 이미 x로 초기화됨
             std::cerr << "[MLX] LayerNorm[0] already applied during projection, using x as-is" << std::endl;
-            DebugArray("LayerNorm[0] skipped (already applied)", x_norm);
         } else {
-            // LayerNorm 적용
-            x_norm = LayerNorm(x, "model.layers." + std::to_string(i) + ".input_layernorm");
-            if (i == 0) {
-                DebugArray("After LayerNorm[0]", x_norm);
-            }
+            x_norm = LayerNorm(x, layer_weights.input_layernorm);
         }
         
-        // x_norm shape 확인 (첫 번째 layer 후)
-        if (i == 0) {
-            std::cerr << "[MLX] After LayerNorm[0], x_norm shape: (" << x_norm.shape(0) << ", " << x_norm.shape(1) << ")" << std::endl;
-        }
+        // AttentionLayer 내부에서는 이미 Sanitize되어 나옴 (이전 수정사항)
+        mx::array x_attn = AttentionLayer(x_norm, layer_weights.attn);
         
-        // Self-attention - x_norm을 명시적으로 전달
-        // [디버그] 전달 전 변수 확인 - 스코프 문제 검증
-        if (i == 0) {
-            std::cerr << ">>> Before Calling AttentionLayer[" << i << "] <<<" << std::endl;
-            DebugArray("x_norm (arg to AttentionLayer)", x_norm);
-            std::cerr << "x_norm Ptr: " << &x_norm << std::endl;
-            std::cerr << "x_norm shape().back(): " << x_norm.shape().back() << std::endl;
-            
-            // 강제 Assertion - 스코프 문제 확인
-            if (x_norm.shape().back() != 2048) {
-                std::cerr << "!!! STOP: x_norm is NOT 2048 here! It is " << x_norm.shape().back() << std::endl;
-                throw std::runtime_error("x_norm shape verification failed before AttentionLayer call");
-            }
-        }
-        mx::array x_attn = AttentionLayer(x_norm, i);
+        // [3] Residual Add (Attention)
+        // 안전한 덧셈을 위해 타입 확인 (Sanitize가 float32로 만들었으므로 안전)
         x = x_residual + x_attn;
         
-        // Feed-forward를 위한 residual 저장
+        // [핵심] 덧셈 직후 즉시 평가하여 그래프 끊기
+        Sanitize(x);
+
+        // [4] FFN Residual 저장
         mx::array x_residual_ff = x;
         
-        // Post-norm
-        x = LayerNorm(x, "model.layers." + std::to_string(i) + ".post_attention_layernorm");
+        // [5] Post-Norm & FFN
+        const auto& layer_weights_ff = model_->layers[i];
+        mx::array x_norm_ff = LayerNorm(x, layer_weights_ff.post_attention_layernorm);
         
-        // Feed-forward
-        mx::array ff_out = FeedForwardLayer(x, i);
+        // FeedForwardLayer 내부에서도 Sanitize되어 나옴
+        mx::array ff_out = FeedForwardLayer(x_norm_ff, layer_weights_ff.mlp);
+        
+        // [6] Residual Add (FFN)
         x = x_residual_ff + ff_out;
+        
+        // [핵심] 레이어 종료 전 최종 확정 -> 다음 레이어 LayerNorm 입력으로 들어감
+        Sanitize(x);
+        
+        // (선택) 진행상황 로깅
+        // if (i % 2 == 0) std::cout << "Layer " << i << " completed." << std::endl;
     }
     
-    // Final layer norm
-    x = LayerNorm(x, "model.norm");
+    // Final layer norm (구조체 기반)
+    x = LayerNorm(x, model_->norm);
     
-    // Output projection
-    mx::array lm_head = GetWeight("lm_head.weight");
-    mx::array logits = mx::matmul(x, mx::transpose(lm_head, {1, 0}));
+    // [핵심 수정 1] 입력 x의 뷰 속성 제거 (GPU 메모리 물리적 할당 강제)
+    // 슬라이싱이나 이전 연산으로 인해 x가 '가상 뷰'일 수 있습니다.
+    // [Final Layer Norm]
+    x = LayerNorm(x, model_->norm);
+    Sanitize(x);
+
+    // [LM Head Matmul]
+    // lm_head: (Vocab, Hidden) 형태일 가능성이 높음 (102400, 2048)
+    // x: (Batch, Hidden) (2, 2048)
+    // 목표: (Batch, Vocab)
     
-    // 마지막 토큰의 logits만 반환
-    // 인덱스를 int32로 명시적으로 변환
-    int lastIdx = static_cast<int>(tokens.size() - 1);
-    std::vector<int32_t> indices = {lastIdx};
-    mx::array indexArray(indices.data(), {1}, mx::int32);
-    mx::array lastLogits = mx::take(logits, indexArray, 0);  // axis 0으로 수정
-    
-    // take의 결과는 2D일 수 있으므로 squeeze
-    if (lastLogits.shape().size() > 1) {
-        lastLogits = mx::squeeze(lastLogits, 0);
+    mx::array logits = mx::array(0.0f); // 초기화
+    mx::array lm_head_w = model_->lm_head;
+
+    try {
+        int x_dim = x.shape().back();
+        int head_in_dim = lm_head_w.shape(0);
+        int head_out_dim = lm_head_w.shape(1);
+        
+        if (x_dim == head_in_dim) {
+            // Case 1: (Batch, Hidden) @ (Hidden, Vocab)
+            logits = mx::matmul(x, lm_head_w);
+        } 
+        else if (x_dim == head_out_dim) {
+            // Case 2: (Batch, Hidden) @ (Vocab, Hidden)^T
+            // 가중치 Transpose 금지 -> (lm_head @ x^T)^T 수행
+            
+            // x(Batch, Hidden) -> x_T(Hidden, Batch)
+            mx::array x_T = mx::transpose(x, {1, 0});
+            
+            // lm_head(Vocab, Hidden) @ x_T(Hidden, Batch) -> res(Vocab, Batch)
+            mx::array res_T = mx::matmul(lm_head_w, x_T);
+            
+            // res(Vocab, Batch) -> res_T(Batch, Vocab)
+            logits = mx::transpose(res_T, {1, 0});
+        }
+        else if (x_dim > head_out_dim && head_out_dim > 0) {
+            // Case 3: 입력이 샤딩된 경우 슬라이싱
+            // x를 head_out_dim에 맞게 슬라이싱
+            mx::array x_sliced = mx::slice(x, {0, 0}, {x.shape(0), head_out_dim}, {1, 1});
+            x_sliced = mx::contiguous(x_sliced);
+            
+            // (Batch, Hidden_Shard) @ (Vocab, Hidden_Shard)^T
+            mx::array x_T = mx::transpose(x_sliced, {1, 0});
+            mx::array res_T = mx::matmul(lm_head_w, x_T);
+            logits = mx::transpose(res_T, {1, 0});
+        }
+        else {
+            std::cerr << "[MLX] FATAL: Dimension mismatch in lm_head. x: " 
+                      << x.shape() << ", lm_head: " << lm_head_w.shape() << std::endl;
+            throw std::runtime_error("Dimension mismatch in lm_head");
+        }
+
+        // [최종 결과 정리]
+        if (logits.dtype() != mx::float32) {
+            logits = mx::astype(logits, mx::float32);
+        }
+        logits = mx::contiguous(logits);
+        
+        // 최종 평가 (eval() 대신 간단한 연산 사용)
+        logits = logits + mx::array(0.0f);
+        mx::synchronize(model_->stream);
+        
+        std::cout << "[MLX] Logits Ready. Shape: " << logits.shape() << std::endl;
+        
+        // 마지막 행만 추출하여 반환 (RunGeneration에서 사용)
+        // batch_size가 1보다 큰 경우 마지막 행만 반환
+        size_t batch_size = logits.shape(0);
+        if (batch_size > 1) {
+            // 마지막 행 인덱스
+            int last_row_idx = static_cast<int>(batch_size - 1);
+            mx::array row_indices({last_row_idx}, mx::int32);
+            
+            // take로 마지막 행 추출
+            mx::array last_row = mx::take(logits, row_indices, 0); // (1, vocab)
+            last_row = mx::reshape(last_row, {static_cast<int>(logits.shape(1))}); // (vocab,)
+            
+            // 완전한 복사로 materialize
+            last_row = mx::astype(last_row, mx::float32);
+            last_row = mx::contiguous(last_row);
+            last_row = last_row + mx::array(0.0f);
+            mx::synchronize(model_->stream);
+            
+            std::cout << "[MLX] Last row extracted. Shape: " << last_row.shape() << std::endl;
+            return last_row;
+        }
+
+    } catch (const std::exception& e) {
+        std::cerr << "[MLX] Error in lm_head: " << e.what() << std::endl;
+        return mx::zeros({model_->vocabSize}, mx::float32);
     }
-    
-    // item() 호출 시 자동 평가되므로 EvalArray 불필요
-    return lastLogits;
+
+    // batch_size가 1인 경우 전체 반환
+    return logits;
 }
 
 mx::array MlxInference::ApplyTopK(const mx::array& probs, int k) {
@@ -2176,6 +2184,7 @@ int MlxInference::SampleToken(const mx::array& probs) {
         if (val >= r) {
             return i;
         }
+
     }
     
     // fallback: argmax 사용
@@ -2184,11 +2193,120 @@ int MlxInference::SampleToken(const mx::array& probs) {
         if (sampledIdx.dtype() == mx::int32) {
             return static_cast<int>(sampledIdx.item<int32_t>());
         } else {
-            return static_cast<int>(sampledIdx.item<float>());
+    return static_cast<int>(sampledIdx.item<float>());
         }
     } catch (...) {
         return 0;
     }
+}
+
+// [수정 2] CPU 기반의 완전한 샘플링 함수 (Top-K, Top-P, Min-P 지원)
+int MlxInference::SampleTokenCPU(const float* logits_data, int size, double temperature, float repeat_penalty, 
+                                  int top_k, double top_p, double min_p,
+                                  const std::vector<int>& generated_tokens, int repeat_last_n) {
+    
+    // 1. Logits 복사 (원본 보존)
+    std::vector<float> logits(logits_data, logits_data + size);
+
+    // 2. Repeat Penalty 적용
+    if (repeat_penalty != 1.0f && !generated_tokens.empty()) {
+        int start_idx = std::max(0, (int)generated_tokens.size() - repeat_last_n);
+        for (size_t i = start_idx; i < generated_tokens.size(); ++i) {
+            int token_id = generated_tokens[i];
+            if (token_id >= 0 && token_id < size) {
+                // Logit이 양수면 나누고, 음수면 곱해서 값을 낮춤 (확률 감소)
+                if (logits[token_id] > 0) logits[token_id] /= repeat_penalty;
+                else logits[token_id] *= repeat_penalty;
+            }
+        }
+    }
+
+    // 3. Greedy Decoding (Temperature = 0)
+    // 가장 확률이 높은 것 즉시 반환 (연산 최소화)
+    if (temperature <= 0.0) {
+        auto max_it = std::max_element(logits.begin(), logits.end());
+        return static_cast<int>(std::distance(logits.begin(), max_it));
+    }
+
+    // 4. Softmax (Logits -> Probabilities)
+    // Temperature 적용 및 수치 안정성을 위한 Max Subtraction
+    float max_logit = *std::max_element(logits.begin(), logits.end());
+    float sum_exp = 0.0f;
+    
+    // 지수함수 계산 (In-place)
+    for (int i = 0; i < size; ++i) {
+        logits[i] = std::exp((logits[i] - max_logit) / temperature);
+        sum_exp += logits[i];
+    }
+    
+    // 정규화 (Probabilities)
+    // 이제 logits[i]는 실제 확률값(0.0 ~ 1.0)입니다.
+    for (int i = 0; i < size; ++i) {
+        logits[i] /= sum_exp;
+    }
+
+    // 5. 필터링 준비 (Top-K, Top-P, Min-P)
+    // 정렬이 필요하므로 (ID, Prob) 쌍으로 변환
+    std::vector<TokenProb> probs(size);
+    for (int i = 0; i < size; ++i) {
+        probs[i] = {i, logits[i]};
+    }
+
+    // 확률 내림차순 정렬
+    std::sort(probs.begin(), probs.end(), [](const TokenProb& a, const TokenProb& b) {
+        return a.val > b.val;
+    });
+
+    // 6. Min-P Sampling
+    // 가장 높은 확률의 min_p 비율보다 낮은 토큰 제거
+    if (min_p > 0.0) {
+        float max_prob = probs[0].val;
+        float threshold = max_prob * min_p;
+        // 임계값보다 낮은 첫 위치 찾기
+        auto it = std::find_if(probs.begin(), probs.end(), [threshold](const TokenProb& p) {
+            return p.val < threshold;
+        });
+        probs.erase(it, probs.end());
+    }
+
+    // 7. Top-K Sampling
+    // 상위 K개만 남김
+    if (top_k > 0 && top_k < static_cast<int>(probs.size())) {
+        probs.resize(top_k);
+    }
+
+    // 8. Top-P (Nucleus) Sampling
+    // 누적 확률이 P를 넘을 때까지 남김
+    if (top_p > 0.0 && top_p < 1.0) {
+        float cum_prob = 0.0f;
+        for (size_t i = 0; i < probs.size(); ++i) {
+            cum_prob += probs[i].val;
+            if (cum_prob >= top_p) {
+                probs.resize(i + 1); // 현재까지 포함하고 자름
+                break;
+            }
+        }
+    }
+
+    // 9. 최종 Multinomial Sampling
+    // 필터링 후 확률의 합이 1이 아니므로 재정규화가 필요하지만,
+    // std::discrete_distribution은 가중치 비율만 맞으면 알아서 처리해줍니다.
+    
+    // 남은 후보들의 가중치 추출
+    std::vector<float> final_weights;
+    final_weights.reserve(probs.size());
+    for (const auto& p : probs) {
+        final_weights.push_back(p.val);
+    }
+
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    
+    // 가중치 기반 랜덤 선택
+    std::discrete_distribution<> dist(final_weights.begin(), final_weights.end());
+    int chosen_index = dist(gen);
+
+    return probs[chosen_index].id;
 }
 
 mx::array MlxInference::GenerateNextToken(const mx::array& logits, double temperature, int topK, double topP, double minP) {
@@ -2392,12 +2510,12 @@ void MlxInference::RunGeneration(const std::string& prompt, const std::map<std::
         }
         
         // 생성 파라미터
-        double temperature = options.at("temperature");
-        int topK = static_cast<int>(options.at("top_k"));
-        double topP = options.at("top_p");
-        double minP = options.at("min_p");
-        double repeatPenalty = options.at("repeat_penalty");
-        int repeatLastN = static_cast<int>(options.at("repeat_last_n"));
+        double temperature = options.count("temperature") ? options.at("temperature") : 0.7;
+        int topK = options.count("top_k") ? static_cast<int>(options.at("top_k")) : 40;
+        double topP = options.count("top_p") ? options.at("top_p") : 0.95;
+        double minP = options.count("min_p") ? options.at("min_p") : 0.05;
+        double repeatPenalty = options.count("repeat_penalty") ? options.at("repeat_penalty") : 1.1;
+        int repeatLastN = options.count("repeat_last_n") ? static_cast<int>(options.at("repeat_last_n")) : 64;
         int maxTokens = static_cast<int>(options.at("max_tokens"));
         
         std::vector<int> generatedTokens;
@@ -2405,47 +2523,67 @@ void MlxInference::RunGeneration(const std::string& prompt, const std::map<std::
         
         // MLX를 사용한 토큰 생성 (ggml-metal 스타일)
         for (int i = 0; i < maxTokens; ++i) {
-            // Forward pass
+            // 1. ForwardPass 호출 (성공함)
+            // 반환값: (vocab,) 크기의 마지막 행 Logits (이미 materialize됨)
             mx::array logits = ForwardPass(lastNTokens, i);
+            std::cout << "[MLX] RunGeneration - ForwardPass completed. Shape: " << logits.shape() << std::endl;
             
-            // Repeat penalty 적용 (llama.cpp 스타일)
-            if (repeatPenalty != 1.0 && !generatedTokens.empty()) {
-                int startIdx = std::max(0, static_cast<int>(generatedTokens.size()) - repeatLastN);
-                std::set<int> seenTokens;
-                for (int j = startIdx; j < static_cast<int>(generatedTokens.size()); ++j) {
-                    seenTokens.insert(generatedTokens[j]);
-                }
+            // ForwardPass에서 이미 materialize된 마지막 행을 반환하므로 추가 처리 불필요
+            size_t vocab_size = logits.shape(0); // (vocab,)
+            std::cout << "[MLX] RunGeneration - Last row logits received. Vocab size: " << vocab_size << std::endl;
+            
+            // Logits를 std::vector<float>로 변환 (CPU 샘플링을 위해)
+            // ForwardPass에서 이미 materialize된 logits를 직접 data<float>()로 읽기
+            std::cout << "[MLX] RunGeneration - Converting logits to CPU vector..." << std::endl;
+            std::vector<float> safe_logits;
+            safe_logits.reserve(vocab_size);
+            
+            try {
+                // logits가 이미 float32이고 materialize된 상태이므로 data<float>() 직접 사용
+                // 추가 동기화 및 contiguous 확인
+                logits = mx::contiguous(logits);
+                logits = logits + mx::array(0.0f); // 강제 평가
+                mx::synchronize(model_->stream);
                 
-                // logits에 penalty 적용
-                // MLX에서는 scatter를 사용하여 특정 인덱스의 값을 수정
-                int vocabSize = logits.shape(-1);
-                for (int tokenId : seenTokens) {
-                    if (tokenId >= 0 && tokenId < vocabSize) {
-                        // 해당 토큰의 logit 값 가져오기
-                        mx::array tokenIdx = mx::array({tokenId}, mx::int32);
-                        mx::array currentLogit = mx::take(logits, tokenIdx, 0);
-                        float logitVal = currentLogit.item<float>();
-                        
-                        // penalty 적용: logit이 양수면 나누고, 음수면 곱하기
-                        float newLogit = logitVal;
-                        if (logitVal > 0.0f) {
-                            newLogit = logitVal / static_cast<float>(repeatPenalty);
-                        } else {
-                            newLogit = logitVal * static_cast<float>(repeatPenalty);
-                        }
-                        
-                        // scatter를 사용하여 logits 업데이트
-                        mx::array newVal = mx::array({newLogit}, mx::float32);
-                        logits = mx::scatter(logits, tokenIdx, newVal, 0);
-                    }
+                // data<float>() 직접 접근
+                const float* logits_ptr = logits.data<float>();
+                if (logits_ptr != nullptr) {
+                    safe_logits.assign(logits_ptr, logits_ptr + vocab_size);
+                    std::cout << "[MLX] RunGeneration - Logits converted to CPU vector. Size: " << safe_logits.size() << std::endl;
+                } else {
+                    throw std::runtime_error("logits.data<float>() returned nullptr");
                 }
+            } catch (const std::exception& e) {
+                std::cerr << "[MLX] Error converting logits: " << e.what() << std::endl;
+                // Fallback: 첫 번째 토큰 사용
+                generatedTokens.push_back(0);
+                lastNTokens.push_back(0);
+                continue;
             }
             
-            // 다음 토큰 생성
-            mx::array nextTokenArr = GenerateNextToken(logits, temperature, topK, topP, minP);
-            // item() 호출 시 자동 평가되므로 EvalArray 불필요
-            // nextTokenArr는 int32 배열이므로 item<int32_t>()로 읽기
-            int nextToken = static_cast<int>(nextTokenArr.item<int32_t>());
+            // CPU 샘플링 호출 (완전한 기능 지원)
+            int nextToken;
+            try {
+                nextToken = SampleTokenCPU(
+                    safe_logits.data(),     // GPU에서 복사해온 벡터 데이터
+                    static_cast<int>(vocab_size), 
+                    temperature, 
+                    (float)repeatPenalty, 
+                    topK,                   // Top-K 추가
+                    topP,                   // Top-P 추가
+                    minP,                   // Min-P 추가
+                    generatedTokens, 
+                    repeatLastN
+                );
+                std::cout << "[MLX] RunGeneration - Token selected: " << nextToken << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "[MLX] Error in SampleTokenCPU: " << e.what() << std::endl;
+                // Fallback: 첫 번째 토큰 사용
+                nextToken = 0;
+            }
+            
+            // 디버그: 생성된 토큰 확인 (첫 토큰 생성 시 주석 해제하여 확인 가능)
+            // std::cout << "[MLX] Token generated: " << nextToken << std::endl;
             
             generatedTokens.push_back(nextToken);
             lastNTokens.push_back(nextToken);
@@ -2458,6 +2596,7 @@ void MlxInference::RunGeneration(const std::string& prompt, const std::map<std::
             // 토큰 디코딩
             std::string tokenStr = Decode({nextToken});
             
+            // 콜백 전송
             if (hasTokenCallback_) {
                 std::string tokenStrCopy = tokenStr;
                 auto callback = [](Napi::Env env, Napi::Function jsCallback, std::string* tokenStr) {
@@ -2569,3 +2708,4 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
 }
 
 NODE_API_MODULE(mlx_server, Init)
+

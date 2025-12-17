@@ -10,8 +10,8 @@ const fs = require('fs');
 // 설정
 const SERVER_PORT = 8081;
 const SERVER_URL = `http://localhost:${SERVER_PORT}`;
-const TEST_PROMPT = '안녕, 대한민국의 수도는 어디지?';
-const MAX_RETRIES = 100; // 최대 재시도 횟수 (무한 반복을 위해 큰 값)
+const TEST_PROMPT = 'What is the capital of South Korea?';
+const MAX_RETRIES = 1; // 테스트 1번만 실행
 const HEALTH_CHECK_RETRIES = 3;
 const HEALTH_CHECK_DELAY = 1000; // 1초
 const SERVER_START_TIMEOUT = 30000; // 30초
@@ -151,24 +151,56 @@ process.on('SIGINT', () => {
         process.stderr.write(`[Server Error] ${output}`);
       });
 
-      serverProcess.on('exit', (code) => {
+      serverProcess.on('exit', (code, signal) => {
         if (code !== 0 && code !== null) {
-          logError(`서버가 종료되었습니다 (코드: ${code})`);
+          logError(`서버가 종료되었습니다 (코드: ${code}, signal: ${signal})`);
           log('서버 출력:', 'info');
           console.log(serverOutput);
+          // 서버가 크래시된 경우 reject
+          if (!serverOutput.includes('Server started on port')) {
+            reject(new Error(`서버가 시작 전에 종료되었습니다 (코드: ${code})`));
+          }
         }
+      });
+      
+      // 서버 프로세스 오류 처리
+      serverProcess.on('error', (error) => {
+        logError('서버 프로세스 오류:', error);
+        reject(error);
       });
 
       // 서버 시작 대기
       const startTime = Date.now();
+      let serverStarted = false;
       const checkInterval = setInterval(async () => {
+        // 서버 프로세스가 종료되었는지 확인
+        if (serverProcess && serverProcess.killed) {
+          clearInterval(checkInterval);
+          if (!serverStarted) {
+            reject(new Error('서버 프로세스가 시작 전에 종료되었습니다'));
+          }
+          return;
+        }
+        
+        // 서버 출력에서 "Server started" 메시지 확인
+        if (serverOutput.includes('Server started on port') || serverOutput.includes('[MLX] Server started on port')) {
+          serverStarted = true;
+        }
+        
         try {
           const response = await new Promise((resolve, reject) => {
             const req = http.get(`${SERVER_URL}/health`, (res) => {
               resolve({ statusCode: res.statusCode });
             });
-            req.on('error', reject);
-            req.setTimeout(1000, () => {
+            req.on('error', (err) => {
+              // ECONNREFUSED는 서버가 아직 시작되지 않았음을 의미
+              if (err.code === 'ECONNREFUSED') {
+                reject(new Error('Connection refused'));
+              } else {
+                reject(err);
+              }
+            });
+            req.setTimeout(2000, () => {
               req.destroy();
               reject(new Error('Health check 타임아웃'));
             });
@@ -177,22 +209,25 @@ process.on('SIGINT', () => {
           if (response.statusCode === 200) {
             clearInterval(checkInterval);
             log('서버가 시작되었습니다');
+            serverStarted = true;
             resolve();
           }
         } catch (error) {
-          // 서버가 아직 시작되지 않음
+          // 서버가 아직 시작되지 않음 - 정상적인 상황
           if (Date.now() - startTime > SERVER_START_TIMEOUT) {
             clearInterval(checkInterval);
-            reject(new Error(`서버 시작 타임아웃 (${SERVER_START_TIMEOUT}ms)`));
+            reject(new Error(`서버 시작 타임아웃 (${SERVER_START_TIMEOUT}ms). 서버 출력:\n${serverOutput}`));
           }
+          // ECONNREFUSED는 정상적인 상황 (서버가 아직 시작 중)
         }
-      }, 500);
+      }, 1000); // 1초마다 체크
 
       // 타임아웃 설정
       setTimeout(() => {
         clearInterval(checkInterval);
-        if (serverProcess && !serverProcess.killed) {
-          reject(new Error('서버 시작 타임아웃'));
+        if (!serverStarted && serverProcess && !serverProcess.killed) {
+          logError('서버 시작 타임아웃. 서버 출력:', serverOutput);
+          reject(new Error(`서버 시작 타임아웃 (${SERVER_START_TIMEOUT}ms). 서버 출력:\n${serverOutput}`));
         }
       }, SERVER_START_TIMEOUT);
 
@@ -566,7 +601,7 @@ async function rebuildAndRestart() {
   });
 }
 
-// 전체 테스트 실행
+// 전체 테스트 실행 (1번만 실행)
 async function runTest() {
   testCount++;
   log(`\n========== 테스트 #${testCount} 시작 ==========`);
@@ -587,25 +622,21 @@ async function runTest() {
     successCount++;
     log(`\n========== 테스트 #${testCount} 성공 ==========`, 'success');
     log(`성공: ${successCount}, 실패: ${failureCount}`);
+    log('테스트 완료 - 1번만 실행됨');
     
-    // 성공했으므로 다음 테스트로 진행
-    await new Promise(resolve => setTimeout(resolve, 2000)); // 2초 대기
-    await runTest();
+    // 테스트 완료 후 종료
+    await cleanup();
+    process.exit(0);
     
   } catch (error) {
     failureCount++;
     logError(`\n========== 테스트 #${testCount} 실패 ==========`, error);
     log(`성공: ${successCount}, 실패: ${failureCount}`);
+    log('테스트 실패 - 재시도하지 않음');
     
-    // 실패 시 재시도
-    if (testCount < MAX_RETRIES) {
-      log('재시도 중... (3초 후)', 'warn');
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      await runTest();
-    } else {
-      logError(`최대 재시도 횟수(${MAX_RETRIES})에 도달했습니다`);
-      process.exit(1);
-    }
+    // 실패 시에도 재시도하지 않고 종료
+    await cleanup();
+    process.exit(1);
   }
 }
 
@@ -642,7 +673,7 @@ process.on('SIGTERM', async () => {
 
 // 메인 실행
 async function main() {
-  log('MLX 서버 반복 테스트 시작');
+  log('MLX 서버 테스트 시작 (1번만 실행)');
   log(`테스트 질의어: "${TEST_PROMPT}"`);
   log(`서버 URL: ${SERVER_URL}`);
   

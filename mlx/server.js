@@ -58,11 +58,17 @@ class MlxServer {
       // C++ native 모듈 인스턴스 생성 및 모델 로드
       if (MlxServerNative) {
         try {
-          console.log(`[MLX] Creating C++ native module instance for model: ${this.modelPath}`);
+          console.log(`[MLX] [LOG] Step 1: Creating C++ native module instance for model: ${this.modelPath}`);
+          console.log(`[MLX] [LOG] Step 1.1: Model directory: ${this.modelDir}`);
+          console.log(`[MLX] [LOG] Step 1.2: Calling MlxServerNative constructor...`);
+          const startTime = Date.now();
           this.nativeServer = new MlxServerNative(this.modelDir);
+          const loadTime = Date.now() - startTime;
+          console.log(`[MLX] [LOG] Step 1.3: Constructor completed in ${loadTime}ms`);
           console.log(`[MLX] ✅ C++ native module instance created successfully`);
         } catch (error) {
           console.error(`[MLX] ❌ Failed to create native server instance:`, error);
+          console.error(`[MLX]    Error message:`, error.message);
           console.error(`[MLX]    Error stack:`, error.stack);
           // 모델 메타데이터는 로드했으므로 계속 진행하지만, nativeServer는 null로 남음
           this.nativeServer = null;
@@ -72,7 +78,9 @@ class MlxServer {
         this.nativeServer = null;
       }
 
+      console.log(`[MLX] [LOG] Step 2: Setting isModelLoaded flag`);
       this.isModelLoaded = true;
+      console.log(`[MLX] [LOG] Step 3: Model metadata loaded: ${this.modelPath}`);
       console.log(`[MLX] Model metadata loaded: ${this.modelPath}`);
       console.log(`[MLX] Model context length: ${this.modelMeta.context_length}`);
     } catch (error) {
@@ -83,8 +91,13 @@ class MlxServer {
 
   async start() {
     try {
+      console.log(`[MLX] [LOG] start() called - isModelLoaded: ${this.isModelLoaded}`);
       if (!this.isModelLoaded) {
+        console.log(`[MLX] [LOG] Model not loaded, calling loadModel()...`);
         await this.loadModel();
+        console.log(`[MLX] [LOG] loadModel() completed`);
+      } else {
+        console.log(`[MLX] [LOG] Model already loaded, skipping loadModel()`);
       }
 
       this.server = http.createServer((req, res) => {
@@ -102,11 +115,15 @@ class MlxServer {
           }
         });
 
+        console.log(`[MLX] [LOG] Step 5: Starting HTTP server on port ${this.port}...`);
         this.server.listen(this.port, () => {
+          console.log(`[MLX] [LOG] Step 5.1: HTTP server listen() callback called`);
           console.log(`[MLX] Server started on port ${this.port}`);
           console.log(`[MLX] Model loaded: ${this.modelPath}`);
+          console.log(`[MLX] [LOG] Step 5.2: Server fully started and ready`);
           resolve(this.server);
         });
+        console.log(`[MLX] [LOG] Step 5.3: listen() called, waiting for callback...`);
       });
     } catch (error) {
       console.error(`[MLX] Failed to start server:`, error);
