@@ -13,71 +13,73 @@ const Header = () => {
   const [isDropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
   const STORAGE_KEY = 'llmServerClientConfig';
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [isModelLoading, setIsModelLoading] = useState(false);
 
 
   useEffect(() => {
     let isInitialLoad = true;
     
     const loadConfig = async (maybeConfig) => {
-      console.log('[Header][DEBUG] ===== loadConfig called =====');
-      console.log('[Header][DEBUG] isInitialLoad:', isInitialLoad);
-      console.log('[Header][DEBUG] maybeConfig:', maybeConfig);
-      console.log('[Header][DEBUG] current config.activeModelId:', config?.activeModelId);
+      // console.log('[Header][DEBUG] ===== loadConfig called =====');
+      // console.log('[Header][DEBUG] isInitialLoad:', isInitialLoad);
+      // console.log('[Header][DEBUG] maybeConfig:', maybeConfig);
+      // console.log('[Header][DEBUG] current config.activeModelId:', config?.activeModelId);
       
       let cfg = null;
       
       if (maybeConfig && maybeConfig.models) {
-        console.log('[Header][DEBUG] Using maybeConfig from parameter');
+        // console.log('[Header][DEBUG] Using maybeConfig from parameter');
         // ensure activeModelId exists if models exist
         cfg = { ...maybeConfig };
         if (!cfg.activeModelId && Array.isArray(cfg.models) && cfg.models.length > 0) {
-          console.log('[Header][DEBUG] No activeModelId, setting to first model:', cfg.models[0].id);
+          // console.log('[Header][DEBUG] No activeModelId, setting to first model:', cfg.models[0].id);
           cfg.activeModelId = cfg.models[0].id;
         }
       } else if (window.electronAPI) {
-        console.log('[Header][DEBUG] Electron mode: Loading config via IPC');
+        // console.log('[Header][DEBUG] Electron mode: Loading config via IPC');
         const loadedConfig = await window.electronAPI.loadConfig();
-        console.log('[Header][DEBUG] Electron mode: Loaded config:', loadedConfig);
+        // console.log('[Header][DEBUG] Electron mode: Loaded config:', loadedConfig);
         // Ensure loadedConfig and its models property are not null/undefined
         if (loadedConfig && loadedConfig.models) {
           cfg = loadedConfig;
           // ensure activeModelId exists if models exist
           if (!cfg.activeModelId && Array.isArray(cfg.models) && cfg.models.length > 0) {
-            console.log('[Header][DEBUG] Electron mode: No activeModelId, setting to first model:', cfg.models[0].id);
+            // console.log('[Header][DEBUG] Electron mode: No activeModelId, setting to first model:', cfg.models[0].id);
             cfg.activeModelId = cfg.models[0].id;
           }
         }
       } else {
-        console.log('[Header][DEBUG] Client mode: Loading config from localStorage');
+        // console.log('[Header][DEBUG] Client mode: Loading config from localStorage');
         try {
           const raw = localStorage.getItem(STORAGE_KEY);
-          console.log('[Header][DEBUG] Client mode: Raw localStorage value:', raw ? 'exists' : 'null');
+          // console.log('[Header][DEBUG] Client mode: Raw localStorage value:', raw ? 'exists' : 'null');
           if (raw) {
             const parsed = JSON.parse(raw);
-            console.log('[Header][DEBUG] Client mode: Parsed config:', parsed);
+            // console.log('[Header][DEBUG] Client mode: Parsed config:', parsed);
             if (parsed && parsed.models) {
               cfg = parsed;
               // ensure activeModelId exists if models exist
               if (!cfg.activeModelId && Array.isArray(cfg.models) && cfg.models.length > 0) {
-                console.log('[Header][DEBUG] Client mode: No activeModelId, setting to first model:', cfg.models[0].id);
+                // console.log('[Header][DEBUG] Client mode: No activeModelId, setting to first model:', cfg.models[0].id);
                 cfg.activeModelId = cfg.models[0].id;
               }
             }
           }
         } catch (_e) {
-          console.error('[Header][DEBUG] Client mode: Error parsing localStorage:', _e);
+          // console.error('[Header][DEBUG] Client mode: Error parsing localStorage:', _e);
         }
       }
       
-      console.log('[Header][DEBUG] Final cfg:', cfg);
-      console.log('[Header][DEBUG] cfg.activeModelId:', cfg?.activeModelId);
+      // console.log('[Header][DEBUG] Final cfg:', cfg);
+      // console.log('[Header][DEBUG] cfg.activeModelId:', cfg?.activeModelId);
       
       // config를 설정하고, activeModelId가 있으면 서버를 시작하도록 요청
       if (cfg && cfg.models) {
         const previousActiveModelId = config?.activeModelId;
-        console.log('[Header][DEBUG] Previous activeModelId:', previousActiveModelId);
-        console.log('[Header][DEBUG] New activeModelId:', cfg.activeModelId);
-        console.log('[Header][DEBUG] Models count:', cfg.models.length);
+        // console.log('[Header][DEBUG] Previous activeModelId:', previousActiveModelId);
+        // console.log('[Header][DEBUG] New activeModelId:', cfg.activeModelId);
+        // console.log('[Header][DEBUG] Models count:', cfg.models.length);
         
         setConfig(cfg);
         
@@ -108,19 +110,19 @@ const Header = () => {
         // activeModelId가 있고, 이전과 다르거나 최초 로드인 경우 서버를 시작하도록 요청
         if (cfg.activeModelId) {
           const activeModel = cfg.models.find(m => m.id === cfg.activeModelId);
-          console.log('[Header][DEBUG] Active model found:', activeModel ? activeModel.id : 'NOT FOUND');
+          // console.log('[Header][DEBUG] Active model found:', activeModel ? activeModel.id : 'NOT FOUND');
           
           if (activeModel) {
             // activeModelId가 변경되었거나 최초 로드인 경우 서버 시작
             const shouldStartServer = isInitialLoad || previousActiveModelId !== cfg.activeModelId;
-            console.log('[Header][DEBUG] shouldStartServer:', shouldStartServer);
-            console.log('[Header][DEBUG] - isInitialLoad:', isInitialLoad);
-            console.log('[Header][DEBUG] - previousActiveModelId !== cfg.activeModelId:', previousActiveModelId !== cfg.activeModelId);
-            console.log('[Header][DEBUG] - previousActiveModelId:', previousActiveModelId);
-            console.log('[Header][DEBUG] - cfg.activeModelId:', cfg.activeModelId);
+            // console.log('[Header][DEBUG] shouldStartServer:', shouldStartServer);
+            // console.log('[Header][DEBUG] - isInitialLoad:', isInitialLoad);
+            // console.log('[Header][DEBUG] - previousActiveModelId !== cfg.activeModelId:', previousActiveModelId !== cfg.activeModelId);
+            // console.log('[Header][DEBUG] - previousActiveModelId:', previousActiveModelId);
+            // console.log('[Header][DEBUG] - cfg.activeModelId:', cfg.activeModelId);
             
             if (shouldStartServer) {
-              console.log('[Header][DEBUG] ✅ Starting server...');
+              // console.log('[Header][DEBUG] ✅ Starting server...');
               console.log('[Header] Config loaded/updated: Active model found, triggering server start:', {
                 modelId: cfg.activeModelId,
                 previousModelId: previousActiveModelId,
@@ -129,18 +131,18 @@ const Header = () => {
               
               // 초기 로드 시에는 서버가 이미 실행 중이므로 config만 저장
               if (window.electronAPI) {
-                console.log('[Header][DEBUG] Electron mode: Calling saveConfig...');
+                // console.log('[Header][DEBUG] Electron mode: Calling saveConfig...');
                 try {
                   const result = await window.electronAPI.saveConfig(cfg);
-                  console.log('[Header][DEBUG] Electron mode: saveConfig result:', result);
+                  // console.log('[Header][DEBUG] Electron mode: saveConfig result:', result);
                   console.log('[Header] Electron mode: Config saved');
                 } catch (error) {
-                  console.error('[Header][DEBUG] Electron mode: saveConfig error:', error);
+                  // console.error('[Header][DEBUG] Electron mode: saveConfig error:', error);
                   console.error('[Header] Electron mode: Failed to save config on load:', error);
                 }
               } else {
                 // 클라이언트 모드: /api/save-config 호출 (서버는 이미 실행 중)
-                console.log('[Header][DEBUG] Client mode: Calling /api/save-config...');
+                // console.log('[Header][DEBUG] Client mode: Calling /api/save-config...');
                 try {
                   const response = await fetch('http://localhost:8083/api/save-config', {
                     method: 'POST',
@@ -149,82 +151,118 @@ const Header = () => {
                   });
                   if (response.ok) {
                     const result = await response.json();
-                    console.log('[Header][DEBUG] Client mode: Config saved:', result);
+                    // console.log('[Header][DEBUG] Client mode: Config saved:', result);
                   } else {
                     const errorText = await response.text();
-                    console.error('[Header][DEBUG] Client mode: Failed to save config:', response.status, errorText);
+                    // console.error('[Header][DEBUG] Client mode: Failed to save config:', response.status, errorText);
                   }
                 } catch (error) {
-                  console.error('[Header][DEBUG] Client mode: Error saving config:', error);
+                  // console.error('[Header][DEBUG] Client mode: Error saving config:', error);
                 }
               }
             } else {
-              console.log('[Header][DEBUG] ❌ Skipping server start (shouldStartServer = false)');
+              // console.log('[Header][DEBUG] ❌ Skipping server start (shouldStartServer = false)');
               console.log('[Header] Config loaded but activeModelId unchanged, skipping server start');
             }
           } else {
-            console.error('[Header][DEBUG] ❌ Active model not found in models array');
-            console.error('[Header][DEBUG] Looking for modelId:', cfg.activeModelId);
-            console.error('[Header][DEBUG] Available model IDs:', cfg.models.map(m => m.id));
+            // console.error('[Header][DEBUG] ❌ Active model not found in models array');
+            // console.error('[Header][DEBUG] Looking for modelId:', cfg.activeModelId);
+            // console.error('[Header][DEBUG] Available model IDs:', cfg.models.map(m => m.id));
           }
         } else {
-          console.log('[Header][DEBUG] ❌ No activeModelId in config');
+          // console.log('[Header][DEBUG] ❌ No activeModelId in config');
         }
       } else {
-        console.log('[Header][DEBUG] ❌ No config or models found');
-        console.log('[Header][DEBUG] cfg:', cfg);
-        console.log('[Header][DEBUG] cfg.models:', cfg?.models);
+        // console.log('[Header][DEBUG] ❌ No config or models found');
+        // console.log('[Header][DEBUG] cfg:', cfg);
+        // console.log('[Header][DEBUG] cfg.models:', cfg?.models);
       }
       
       isInitialLoad = false;
-      console.log('[Header][DEBUG] ===== loadConfig completed =====');
+      // console.log('[Header][DEBUG] ===== loadConfig completed =====');
     };
     loadConfig();
 
     const handleClientConfigUpdated = (event) => {
-      console.log('[Header][DEBUG] ===== handleClientConfigUpdated called =====');
-      console.log('[Header][DEBUG] event:', event);
-      console.log('[Header][DEBUG] event.detail:', event?.detail);
+      // console.log('[Header][DEBUG] ===== handleClientConfigUpdated called =====');
+      // console.log('[Header][DEBUG] event:', event);
+      // console.log('[Header][DEBUG] event.detail:', event?.detail);
       const next = event?.detail?.config;
-      console.log('[Header][DEBUG] next config:', next);
+      // console.log('[Header][DEBUG] next config:', next);
       if (next) {
-        console.log('[Header][DEBUG] Calling loadConfig with next config');
+        // console.log('[Header][DEBUG] Calling loadConfig with next config');
         loadConfig(next);
       } else {
-        console.log('[Header][DEBUG] No next config, skipping loadConfig');
+        // console.log('[Header][DEBUG] No next config, skipping loadConfig');
       }
     };
 
     const handleStorage = (event) => {
-      console.log('[Header][DEBUG] ===== handleStorage called =====');
-      console.log('[Header][DEBUG] event.key:', event?.key);
-      console.log('[Header][DEBUG] STORAGE_KEY:', STORAGE_KEY);
+      // console.log('[Header][DEBUG] ===== handleStorage called =====');
+      // console.log('[Header][DEBUG] event.key:', event?.key);
+      // console.log('[Header][DEBUG] STORAGE_KEY:', STORAGE_KEY);
       if (event && event.key === STORAGE_KEY) {
-        console.log('[Header][DEBUG] Storage key matches, parsing newValue');
+        // console.log('[Header][DEBUG] Storage key matches, parsing newValue');
         try {
           if (event.newValue) {
-            console.log('[Header][DEBUG] event.newValue exists, length:', event.newValue.length);
+            // console.log('[Header][DEBUG] event.newValue exists, length:', event.newValue.length);
             const parsed = JSON.parse(event.newValue);
-            console.log('[Header][DEBUG] Parsed storage value:', parsed);
+            // console.log('[Header][DEBUG] Parsed storage value:', parsed);
             if (parsed && parsed.models) {
-              console.log('[Header][DEBUG] Parsed config has models, calling loadConfig');
+              // console.log('[Header][DEBUG] Parsed config has models, calling loadConfig');
               loadConfig(parsed);
             } else {
-              console.log('[Header][DEBUG] Parsed config missing models, skipping loadConfig');
+              // console.log('[Header][DEBUG] Parsed config missing models, skipping loadConfig');
             }
           } else {
-            console.log('[Header][DEBUG] event.newValue is null/undefined');
+            // console.log('[Header][DEBUG] event.newValue is null/undefined');
           }
         } catch (_e) {
-          console.error('[Header][DEBUG] Error parsing storage value:', _e);
+          // console.error('[Header][DEBUG] Error parsing storage value:', _e);
         }
       } else {
-        console.log('[Header][DEBUG] Storage key does not match, ignoring');
+        // console.log('[Header][DEBUG] Storage key does not match, ignoring');
+      }
+    };
+
+    // 모델 로딩 상태 및 프로그레스 추적
+    const handleModelLoading = (event) => {
+      // 프로그레스 바를 항상 표시하도록 유지
+      // setIsModelLoading(event.detail.loading);
+      // if (!event.detail.loading) {
+      //   setLoadingProgress(0);
+      // }
+    };
+
+    const handleServerLog = (event) => {
+      const logMessage = typeof event.detail === 'string' ? event.detail : '';
+      if (!logMessage) return;
+      
+      // 로그에서 프로그레스 정보 파싱: "Loading progress: [████████░░░░░░░░░░░░░░░░░░░░] 45.2%"
+      const progressMatch = logMessage.match(/Loading progress:.*?(\d+\.?\d*)%/);
+      if (progressMatch) {
+        const progress = parseFloat(progressMatch[1]);
+        setLoadingProgress(Math.min(100, Math.max(0, progress)));
+        setIsModelLoading(true);
+      }
+      // 모델 로딩 완료 감지 - 프로그레스 바는 유지하되 100%로 설정
+      if (logMessage.includes('Model loaded successfully') || logMessage.includes('✅ Model loaded')) {
+        setLoadingProgress(100);
+        // 프로그레스 바를 사라지게 하지 않음
+      }
+      // 모델 로딩 시작 감지
+      if (logMessage.includes('Loading model from') || logMessage.includes('Loading...')) {
+        setIsModelLoading(true);
+        if (!progressMatch) {
+          setLoadingProgress(0);
+        }
       }
     };
 
     window.addEventListener('client-config-updated', handleClientConfigUpdated);
     window.addEventListener('storage', handleStorage);
+    window.addEventListener('model-loading', handleModelLoading);
+    window.addEventListener('server-log', handleServerLog);
     
     const handleClickOutside = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -235,6 +273,8 @@ const Header = () => {
     return () => {
       window.removeEventListener('client-config-updated', handleClientConfigUpdated);
       window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('model-loading', handleModelLoading);
+      window.removeEventListener('server-log', handleServerLog);
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, []);
@@ -351,10 +391,7 @@ const Header = () => {
               {t('header.settings')}
             </NavLink>
           </nav>
-        </div>
-
-        <div className="header-center" ref={dropdownRef}>
-          <div className="model-selector-dropdown">
+          <div className="model-selector-dropdown" ref={dropdownRef}>
             <button className="current-model-display" onClick={() => setDropdownOpen(!isDropdownOpen)}>
               {activeModel ? (getModelLabel(activeModel) || t('header.selectModel')) : t('header.selectModel')}
               <span className="dropdown-arrow">{isDropdownOpen ? '▲' : '▼'}</span>
@@ -373,6 +410,17 @@ const Header = () => {
               </div>
             )}
           </div>
+          <div className="model-loading-progress-container">
+            <div className="model-loading-progress-bar">
+              <div 
+                className="model-loading-progress-fill"
+                style={{ width: `${loadingProgress}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="header-center">
         </div>
 
         <div className="header-right">

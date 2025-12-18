@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './PerformancePanel.css';
 import TokenDebugPanel from './TokenDebugPanel';
-import { getActiveServerUrl } from '../services/api';
+import { getActiveServerUrl, getActiveModelFormat } from '../services/api';
 
 const PerformancePanel = () => {
   const [cpuUsage, setCpuUsage] = useState(0);
@@ -22,6 +22,7 @@ const PerformancePanel = () => {
   const lastProcCpuSampleAtRef = useRef(null);
   const lastPredictedTotalRef = useRef(null);
   const eventSourceRef = useRef(null);
+  const websocketRef = useRef(null);
 
   const getActiveModelIdForMetrics = () => {
     // New client-only config (SettingsPage)
@@ -179,10 +180,15 @@ const PerformancePanel = () => {
     };
   }, []);
 
-  // SSE metrics stream (client-only mode)
+  // Metrics stream (SSE for GGUF, WebSocket for MLX)
   useEffect(() => {
     if (window.electronAPI && window.electronAPI.getSystemMetrics) return;
-    if (typeof EventSource === 'undefined') return;
+    
+    const modelFormat = getActiveModelFormat();
+    const useWebSocket = modelFormat === 'mlx';
+    
+    if (useWebSocket && typeof WebSocket === 'undefined') return;
+    if (!useWebSocket && typeof EventSource === 'undefined') return;
 
     let stopped = false;
     let reconnectTimer = null;
@@ -195,14 +201,22 @@ const PerformancePanel = () => {
         try { eventSourceRef.current.close(); } catch (_e) {}
         eventSourceRef.current = null;
       }
+      if (websocketRef.current) {
+        try { websocketRef.current.close(); } catch (_e) {}
+        websocketRef.current = null;
+      }
     };
 
-    const scheduleReconnect = (delayMs = 1000) => {
+    const scheduleReconnect = (delayMs = 3000) => {
       if (stopped) return;
-      if (reconnectTimer) return;
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+      }
       reconnectTimer = window.setTimeout(() => {
         reconnectTimer = null;
-        connect();
+        if (!stopped) {
+          connect();
+        }
       }, delayMs);
     };
 
@@ -221,8 +235,16 @@ const PerformancePanel = () => {
       const serverUrl = getActiveServerUrl();
 
       // 이미 같은 모델과 서버 URL로 연결되어 있으면 재연결하지 않음
-      if (eventSourceRef.current && currentModelId === modelId && currentServerUrl === serverUrl) {
-        return;
+      if (useWebSocket) {
+        if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN && 
+            currentModelId === modelId && currentServerUrl === serverUrl) {
+          // console.log('[PerformancePanel] WebSocket already connected, skipping');
+          return;
+        }
+      } else {
+        if (eventSourceRef.current && currentModelId === modelId && currentServerUrl === serverUrl) {
+          return;
+        }
       }
 
       // 모델이나 서버 URL이 변경되었으면 재연결
@@ -230,66 +252,137 @@ const PerformancePanel = () => {
       currentServerUrl = serverUrl;
       close();
 
-      // autoload=1 ensures router spawns the model process even if not already loaded
-      const url = `${serverUrl}/metrics/stream?model=${encodeURIComponent(modelId)}&interval_ms=1000&autoload=1`;
-      const es = new EventSource(url);
-      eventSourceRef.current = es;
-
-      es.addEventListener('metrics', (evt) => {
+      const handleMetricsData = (data) => {
         try {
-          const data = JSON.parse(evt.data);
-
+          // console.log('[PerformancePanel] handleMetricsData called with:', data);
+          
           const vramTotalBytes = Number(data.vramTotal || 0);
           const vramUsedBytes = Number(data.vramUsed || 0);
-          if (vramTotalBytes > 0) setVramTotal(Math.round(vramTotalBytes));
-          if (vramUsedBytes >= 0) setVramUsed(Math.round(vramUsedBytes));
+          // console.log('[PerformancePanel] VRAM:', { vramTotalBytes, vramUsedBytes });
+          if (vramTotalBytes > 0) {
+            setVramTotal(Math.round(vramTotalBytes));
+            // console.log('[PerformancePanel] Set vramTotal:', Math.round(vramTotalBytes));
+          }
+          if (vramUsedBytes >= 0) {
+            setVramUsed(Math.round(vramUsedBytes));
+            // console.log('[PerformancePanel] Set vramUsed:', Math.round(vramUsedBytes));
+          }
 
           const sysMemTotal = Number(data.sysMemTotal || 0);
           const sysMemUsed = Number(data.sysMemUsed || 0);
+          // console.log('[PerformancePanel] System Memory:', { sysMemTotal, sysMemUsed });
           if (sysMemTotal > 0 && sysMemUsed >= 0) {
-            setMemoryUsage(Math.max(0, Math.min(100, (sysMemUsed / sysMemTotal) * 100)));
+            const memUsage = Math.max(0, Math.min(100, (sysMemUsed / sysMemTotal) * 100));
+            setMemoryUsage(memUsage);
+            // console.log('[PerformancePanel] Set memoryUsage:', memUsage);
           }
 
           const now = Date.now();
           const cpuSec = Number(data.procCpuSec || 0);
           const cores = Math.max(1, Math.round(Number(data.cpuCores || 1)));
+          // console.log('[PerformancePanel] CPU:', { cpuSec, cores, lastProcCpuSecondsRef: lastProcCpuSecondsRef.current });
           if (lastProcCpuSecondsRef.current != null && lastProcCpuSampleAtRef.current != null) {
             const dt = (now - lastProcCpuSampleAtRef.current) / 1000;
             const dcpu = cpuSec - lastProcCpuSecondsRef.current;
             if (dt > 0 && dcpu >= 0) {
               const pct = (dcpu / dt / cores) * 100;
               setCpuUsage(Math.max(0, Math.min(100, pct)));
+              // console.log('[PerformancePanel] Set cpuUsage:', pct);
             }
+          } else {
+            // 첫 번째 메트릭이므로 초기값 설정만
+            // console.log('[PerformancePanel] First metrics, setting initial values');
           }
           lastProcCpuSecondsRef.current = cpuSec;
           lastProcCpuSampleAtRef.current = now;
 
           const tps = Number(data.tps || 0);
           setTokenSpeed(Math.max(0, tps));
+          // console.log('[PerformancePanel] Set tokenSpeed:', tps);
+          
           // GPU 게이지는 실제 GPU 점유율을 얻기 어려워(플랫폼별/백엔드별),
           // router 모드에서는 VRAM 점유율(%)을 GPU 지표로 사용한다.
           if (vramTotalBytes > 0) {
-            setGpuUsage(Math.max(0, Math.min(100, (vramUsedBytes / vramTotalBytes) * 100)));
+            const gpuUsage = Math.max(0, Math.min(100, (vramUsedBytes / vramTotalBytes) * 100));
+            setGpuUsage(gpuUsage);
+            // console.log('[PerformancePanel] Set gpuUsage:', gpuUsage);
           } else {
             setGpuUsage(0);
+            // console.log('[PerformancePanel] Set gpuUsage: 0 (no VRAM total)');
           }
 
           const predictedTotal = Number(data.predictedTotal || 0);
           if (lastPredictedTotalRef.current != null) {
             const delta = Math.max(0, Math.round(predictedTotal - lastPredictedTotalRef.current));
             setTokenCount(delta);
+            // console.log('[PerformancePanel] Set tokenCount:', delta);
           }
           lastPredictedTotalRef.current = predictedTotal;
-        } catch (_e) {
-          // ignore
+        } catch (e) {
+          // console.error('[PerformancePanel] Error in handleMetricsData:', e, data);
         }
-      });
-
-      // if the SSE connection drops (e.g. router/model restart), retry automatically
-      es.onerror = () => {
-        close();
-        scheduleReconnect(1000);
       };
+
+      if (useWebSocket) {
+        // MLX 모델: WebSocket 사용
+        const wsUrl = serverUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+        const wsUrlFull = `${wsUrl}/metrics/stream`;
+        // console.log('[PerformancePanel] Connecting to WebSocket:', wsUrlFull);
+        const ws = new WebSocket(wsUrlFull);
+        websocketRef.current = ws;
+
+        ws.onopen = () => {
+          // console.log('[PerformancePanel] WebSocket connected');
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            // console.log('[PerformancePanel] Received metrics:', JSON.stringify(data, null, 2));
+            if (data.type === 'metrics') {
+              // console.log('[PerformancePanel] Calling handleMetricsData with:', data);
+              handleMetricsData(data);
+            } else {
+              // console.warn('[PerformancePanel] Received non-metrics data:', data);
+            }
+          } catch (e) {
+            // console.error('[PerformancePanel] Failed to parse metrics:', e, event.data);
+          }
+        };
+
+        ws.onerror = (error) => {
+          // console.error('[PerformancePanel] WebSocket error:', error);
+          // 에러 발생 시 즉시 재연결하지 않고, onclose에서 처리
+        };
+
+        ws.onclose = (event) => {
+          // console.log('[PerformancePanel] WebSocket closed:', event.code, event.reason);
+          if (!stopped && event.code !== 1000) {  // 정상 종료(1000)가 아닌 경우만 재연결
+            scheduleReconnect(3000);
+          }
+        };
+      } else {
+        // GGUF 모델: SSE 사용
+        // autoload=1 ensures router spawns the model process even if not already loaded
+        const url = `${serverUrl}/metrics/stream?model=${encodeURIComponent(modelId)}&interval_ms=1000&autoload=1`;
+        const es = new EventSource(url);
+        eventSourceRef.current = es;
+
+        es.addEventListener('metrics', (evt) => {
+          try {
+            const data = JSON.parse(evt.data);
+            handleMetricsData(data);
+          } catch (_e) {
+            // ignore
+          }
+        });
+
+        // if the SSE connection drops (e.g. router/model restart), retry automatically
+        es.onerror = () => {
+          close();
+          scheduleReconnect(1000);
+        };
+      }
     };
 
     // connect immediately and reconnect when config changes

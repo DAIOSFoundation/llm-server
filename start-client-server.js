@@ -257,10 +257,11 @@ async function startMlxServer(modelConfig) {
   console.log(`[Client Server] Model ID: ${modelConfig.id}`);
   console.log(`[Client Server] Model Path: ${modelConfig.modelPath}`);
   
-  const serverScriptPath = path.join(__dirname, 'mlx', 'server-python.js');
+  // Python 직접 HTTP 서버 사용 (FastAPI 기반)
+  const serverScriptPath = path.join(__dirname, 'mlx', 'server-python-direct.py');
   
   if (!fs.existsSync(serverScriptPath)) {
-    console.error(`[Client Server] ❌ Python server script not found: ${serverScriptPath}`);
+    console.error(`[Client Server] ❌ Python direct server script not found: ${serverScriptPath}`);
     mlxModelConfig = null;
     mlxServerInstance = null;
     return;
@@ -284,7 +285,11 @@ async function startMlxServer(modelConfig) {
     console.log(`[Client Server]    Server script: ${serverScriptPath}`);
     console.log(`[Client Server]    Model path: ${modelPath}`);
     
-    const mlxServerProcess = spawn('node', [serverScriptPath], {
+    // Python 직접 HTTP 서버 실행 (venv 사용)
+    const venvPython = path.join(__dirname, 'mlx', 'venv', 'bin', 'python3');
+    const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
+    
+    const mlxServerProcess = spawn(pythonCmd, [serverScriptPath], {
       cwd: path.join(__dirname, 'mlx'),
       stdio: 'pipe',
       env: {
@@ -303,11 +308,12 @@ async function startMlxServer(modelConfig) {
       console.log(`[MLX Server] ${output}`);
       
       // 서버 시작 확인
-      if (output.includes('MLX Python-based server started on port') || 
-          output.includes('Server started on port')) {
+      if (output.includes('Starting MLX Python HTTP server') || 
+          output.includes('Uvicorn running') ||
+          output.includes('Application startup complete')) {
         if (!serverStarted) {
           serverStarted = true;
-          console.log(`[Client Server] ✅ MLX Python server started successfully`);
+          console.log(`[Client Server] ✅ MLX Python direct HTTP server started successfully`);
         }
       }
     });

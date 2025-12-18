@@ -17,15 +17,19 @@
 
 .header-left {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  min-width: 0;
 }
 
 .header-center {
-  flex: 2;
-  justify-content: center;
+  flex: 0;
+  display: none;
 }
 
 .header-right {
-  flex: 1;
+  flex-shrink: 0;
   justify-content: flex-end;
 }
 
@@ -78,8 +82,9 @@
 /* Model Selector Dropdown Styles */
 .model-selector-dropdown {
   position: relative;
-  min-width: 500px;
-  max-width: 800px;
+  min-width: 450px;
+  max-width: 750px;
+  flex-shrink: 0;
 }
 
 .current-model-display {
@@ -120,4 +125,44 @@
 
 .model-dropdown-item:hover {
   background-color: #4CAF50;
+}
+
+/* Model Loading Progress Bar */
+.model-loading-progress-container {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  margin-left: 12px;
+  margin-right: 12px;
+}
+
+.model-loading-progress-bar {
+  width: 100%;
+  height: 20px;
+  background-color: #222;
+  border: 2px solid #555;
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.model-loading-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4CAF50 0%, #66BB6A 50%, #4CAF50 100%);
+  background-size: 200% 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease-out;
+  animation: progress-shimmer 1.5s ease-in-out infinite;
+  box-shadow: 0 0 8px rgba(76, 175, 80, 0.5);
+}
+
+@keyframes progress-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }

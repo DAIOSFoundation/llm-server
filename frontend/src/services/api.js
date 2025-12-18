@@ -8,21 +8,19 @@ export const getServerUrl = (modelFormat = 'gguf') => {
   return `${baseUrl}:${port}`;
 };
 
-// 현재 활성 모델의 형식을 가져와서 서버 URL 반환
-export const getActiveServerUrl = () => {
+// 현재 활성 모델의 형식을 가져오기
+export const getActiveModelFormat = () => {
   try {
     // llmServerClientConfig를 먼저 확인 (여러 모델 관리용)
-    let config = null;
     const clientConfigStr = localStorage.getItem('llmServerClientConfig');
     if (clientConfigStr) {
       try {
-        config = JSON.parse(clientConfigStr);
+        const config = JSON.parse(clientConfigStr);
         if (config && config.models && Array.isArray(config.models)) {
           const activeModelId = config.activeModelId;
           const activeModel = config.models.find(m => m.id === activeModelId);
           if (activeModel) {
-            const modelFormat = activeModel.modelFormat || 'gguf';
-            return getServerUrl(modelFormat);
+            return activeModel.modelFormat || 'gguf';
           }
         }
       } catch (e) {
@@ -36,18 +34,24 @@ export const getActiveServerUrl = () => {
       try {
         const modelConfig = JSON.parse(modelConfigStr);
         if (modelConfig && modelConfig.modelFormat) {
-          return getServerUrl(modelConfig.modelFormat);
+          return modelConfig.modelFormat;
         }
       } catch (e) {
         // 파싱 실패 시 무시
       }
     }
     
-    // 기본값: GGUF 서버
-    return LLAMA_BASE_URL;
+    // 기본값: GGUF
+    return 'gguf';
   } catch (e) {
-    return LLAMA_BASE_URL; // 기본값
+    return 'gguf'; // 기본값
   }
+};
+
+// 현재 활성 모델의 형식을 가져와서 서버 URL 반환
+export const getActiveServerUrl = () => {
+  const modelFormat = getActiveModelFormat();
+  return getServerUrl(modelFormat);
 };
 
 // Server Log 패널에 메시지를 보내기 위한 헬퍼
@@ -398,9 +402,17 @@ export const countTokens = async (prompt) => {
 // 토큰 디버깅용 함수: 토큰 ID 및 piece 반환
 export const tokenizeText = async (content) => {
   try {
+    if (!content || content.trim() === '') {
+      // console.warn('[API] tokenizeText: Empty content');
+      return [];
+    }
+    
     const config = JSON.parse(localStorage.getItem('modelConfig')) || {};
     const model = (config.modelPath || '').trim();
     const serverUrl = getActiveServerUrl();
+    
+    // console.log('[API] tokenizeText: Calling', `${serverUrl}/tokenize`, 'with content length:', content.length);
+    
     const response = await fetch(`${serverUrl}/tokenize`, {
       method: 'POST',
       headers: {
@@ -416,16 +428,18 @@ export const tokenizeText = async (content) => {
     });
 
     if (!response.ok) {
-      // console.warn('[API] Tokenize API (with_pieces) failed');
+      const errorText = await response.text();
+      // console.warn('[API] Tokenize API (with_pieces) failed:', response.status, errorText);
       return [];
     }
 
     const data = await response.json();
+    // console.log('[API] tokenizeText: Response received:', data.tokens?.length || 0, 'tokens');
     if (data.tokens && Array.isArray(data.tokens)) {
       return data.tokens;
     }
 
-    // console.warn('[API] Unexpected tokenize (with_pieces) response format');
+    // console.warn('[API] Unexpected tokenize (with_pieces) response format:', data);
     return [];
   } catch (error) {
     // console.warn('[API] Tokenize (with_pieces) error:', error);

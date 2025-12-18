@@ -604,7 +604,8 @@ function startGgufServer(modelConfig) {
 
 async function startMlxServer(modelConfig) {
   const { spawn } = require('child_process');
-  const serverScriptPath = path.join(__dirname, 'mlx', 'server-python.js');
+  const fs = require('fs');
+  const serverScriptPath = path.join(__dirname, 'mlx', 'server-python-direct.py');
   
   try {
     currentModelConfig = modelConfig; // 현재 모델 설정 저장
@@ -615,8 +616,11 @@ async function startMlxServer(modelConfig) {
       modelPath = path.join(__dirname, 'mlx', 'models', modelPath);
     }
     
-    // Python 기반 서버 시작
-    const mlxServerProcess = spawn('node', [serverScriptPath], {
+    // Python 직접 HTTP 서버 시작 (venv 사용)
+    const venvPython = path.join(__dirname, 'mlx', 'venv', 'bin', 'python3');
+    const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
+    
+    const mlxServerProcess = spawn(pythonCmd, [serverScriptPath], {
       cwd: path.join(__dirname, 'mlx'),
       stdio: 'pipe',
       env: {

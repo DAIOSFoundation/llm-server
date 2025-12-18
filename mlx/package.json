@@ -1,13 +1,11 @@
 {
   "name": "mlx-server-python",
   "version": "1.0.0",
-  "description": "Python-based MLX server",
-  "main": "server-python.js",
+  "description": "Python-based MLX server (FastAPI)",
+  "main": "server-python-direct.py",
   "scripts": {},
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "dependencies": {
-    "express": "^5.2.1"
-  }
+  "dependencies": {}
 }

@@ -92,11 +92,11 @@ async function startServer() {
 
       log(`MLX 모델 발견: ${mlxModel.modelPath}`);
 
-      // Python 기반 서버 사용
-      const serverScriptPath = path.join(__dirname, 'server-python.js');
+      // Python 직접 HTTP 서버 사용 (FastAPI 기반)
+      const serverScriptPath = path.join(__dirname, 'server-python-direct.py');
       
       if (!fs.existsSync(serverScriptPath)) {
-        throw new Error('server-python.js를 찾을 수 없습니다');
+        throw new Error('server-python-direct.py를 찾을 수 없습니다');
       }
 
       // 모델 경로를 환경변수로 설정
@@ -104,9 +104,12 @@ async function startServer() {
         ? mlxModel.modelPath 
         : path.join(__dirname, 'models', mlxModel.modelPath);
       
-      // Node.js로 Python 기반 서버 시작
-      log('Python 기반 MLX 서버 시작 중...');
-      serverProcess = spawn('node', [serverScriptPath], {
+      // Python 직접 HTTP 서버 시작 (venv 사용)
+      log('Python 직접 HTTP 서버 시작 중...');
+      const venvPython = path.join(__dirname, 'venv', 'bin', 'python3');
+      const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
+      
+      serverProcess = spawn(pythonCmd, [serverScriptPath], {
         cwd: __dirname,
         stdio: 'pipe',
         env: { 
@@ -139,8 +142,8 @@ async function startServer() {
           logError(`서버가 종료되었습니다 (코드: ${code}, signal: ${signal})`);
           log('서버 출력:', 'info');
           console.log(serverOutput);
-          // 서버가 크래시된 경우 reject
-          if (!serverOutput.includes('Server started on port')) {
+          // 서버가 크래시된 경우 reject (FastAPI/Uvicorn 시작 메시지 확인)
+          if (!serverOutput.includes('Uvicorn running') && !serverOutput.includes('Application startup complete')) {
             reject(new Error(`서버가 시작 전에 종료되었습니다 (코드: ${code})`));
           }
         }

@@ -13,6 +13,7 @@ const ChatPage = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isModelLoading, setIsModelLoading] = useState(false);
   const [showSpecialTokens, setShowSpecialTokens] = useState(false);
+  const [isWaitingForFirstToken, setIsWaitingForFirstToken] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const assistantOutputRef = useRef('');
@@ -191,11 +192,12 @@ const ChatPage = () => {
     // 디버그용: 현재 프롬프트 전체를 Token Debug 패널로 전달
     try {
       const fullPrompt = buildLlama3Prompt(nextMessages, language);
+      // console.log('[ChatPage] Dispatching prompt-output event, prompt length:', fullPrompt.length);
       window.dispatchEvent(new CustomEvent('prompt-output', {
         detail: { prompt: fullPrompt },
       }));
     } catch (e) {
-      console.error('Failed to build prompt for debug:', e);
+      // console.error('Failed to build prompt for debug:', e);
     }
 
     // 새 응답 시작 시 이전 assistant 출력 및 버퍼 초기화
@@ -205,61 +207,53 @@ const ChatPage = () => {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
+    setIsWaitingForFirstToken(true);
 
     const assistantMessage = { role: 'assistant', content: '' };
     setMessages(prev => [...prev, assistantMessage]);
 
     try {
       await sendChatMessage([...messages, userMessage], (token) => {
+        // 첫 토큰이 수신되면 로딩 애니메이션 숨김
+        if (isWaitingForFirstToken) {
+          setIsWaitingForFirstToken(false);
+        }
         // 토큰이 수신되면 모델 로딩 완료
         setIsModelLoading(false);
         // 디버깅용으로 전체 assistant 출력 누적
         assistantOutputRef.current += token;
         
-        // 지연된 스트리밍: 토큰을 버퍼에 쌓고, 문장 종결 부호가 있을 때만 화면에 반영
-        streamBufferRef.current += token;
-        const sentenceEndings = ['.', '!', '?', '\n']; // 줄바꿈도 문장 끝으로 간주
-        
-        // 버퍼에 종결 부호가 있는지 확인
-        let lastEndingIndex = -1;
-        for (const ending of sentenceEndings) {
-          const index = streamBufferRef.current.lastIndexOf(ending);
-          if (index > lastEndingIndex) {
-            lastEndingIndex = index;
+        // 즉시 화면에 반영 (서버에서 이미 올바른 증분 텍스트를 보내고 있음)
+        setMessages(prev => {
+          const lastMessage = prev[prev.length - 1];
+          if (lastMessage && lastMessage.role === 'assistant') {
+            // 서버에서 이미 새로운 부분만 보내고 있으므로 바로 추가
+            return [
+              ...prev.slice(0, -1),
+              { ...lastMessage, content: lastMessage.content + token },
+            ];
           }
-        }
-        
-        // 종결 부호가 있으면 그 지점까지 잘라서 화면에 업데이트
-        if (lastEndingIndex !== -1) {
-          const chunkToRender = streamBufferRef.current.substring(0, lastEndingIndex + 1);
-          streamBufferRef.current = streamBufferRef.current.substring(lastEndingIndex + 1); // 남은 부분은 버퍼에 유지
-          
-          setMessages(prev => {
-            const lastMessage = prev[prev.length - 1];
-            if (lastMessage && lastMessage.role === 'assistant') {
-              // 스페셜 토큰 표시 설정에 따라 처리 (이전 로직 활용)
-              const currentContent = lastMessage.content + chunkToRender;
-              return [
-                ...prev.slice(0, -1),
-                { ...lastMessage, content: currentContent },
-              ];
-            }
-            return prev;
-          });
-        }
+          return prev;
+        });
       }, language, showSpecialTokens);
 
       // 스트리밍이 끝난 후 마지막 assistant 응답 전체를 디버그용으로 브로드캐스트
-      // (화면에는 이미 '완성된 문장'까지만 보여주고 있고, 버퍼에 남은 찌꺼기는 버림으로써 '사라지는 현상' 방지)
-      if (assistantOutputRef.current) {
-        // 실제 화면에 표시된 텍스트와 디버그용 텍스트는 다를 수 있음 (버퍼 잔여물 때문)
-        // 디버그용으로는 전체를 다 보내줌
-        window.dispatchEvent(new CustomEvent('assistant-output', {
-          detail: { text: assistantOutputRef.current },
-        }));
-      }
+      // 메시지 상태에서 최종 content를 가져옴
+      setMessages(prev => {
+        const lastMessage = prev[prev.length - 1];
+        if (lastMessage && lastMessage.role === 'assistant' && lastMessage.content) {
+          // console.log('[ChatPage] Dispatching assistant-output event, text length:', lastMessage.content.length);
+          window.dispatchEvent(new CustomEvent('assistant-output', {
+            detail: { text: lastMessage.content },
+          }));
+        } else {
+          // console.warn('[ChatPage] No assistant message content, not dispatching assistant-output event');
+        }
+        return prev;
+      });
     } catch (error) {
       console.error('채팅 오류:', error);
+      setIsWaitingForFirstToken(false);
       
       // 503 에러 (모델 로딩 중) 감지
       if (error.message && error.message.includes('503')) {
@@ -272,6 +266,7 @@ const ChatPage = () => {
       }
     } finally {
       setIsLoading(false);
+      setIsWaitingForFirstToken(false);
       // 토큰 생성 완료 후 입력 필드로 포커스 이동
       setTimeout(() => {
         inputRef.current?.focus();
@@ -331,19 +326,23 @@ const ChatPage = () => {
                   });
                 };
 
+                // assistant 메시지이고 content가 비어있고 첫 토큰을 기다리는 중이면 로딩 애니메이션 표시
+                const showLoading = msg.role === 'assistant' && !msg.content && isWaitingForFirstToken && index === messages.length - 1;
+
                 return (
                   <div key={index} className={`message ${msg.role}`}>
-                    <div className="message-content">{renderContent(msg.content)}</div>
+                    <div className="message-content">
+                      {showLoading ? (
+                        <div className="loading-dots">
+                          <span>.</span><span>.</span><span>.</span>
+                        </div>
+                      ) : (
+                        renderContent(msg.content)
+                      )}
+                    </div>
                   </div>
                 );
               })
-            )}
-            {isLoading && messages[messages.length - 1]?.role === 'user' && (
-              <div className="message assistant">
-                <div className="message-content loading-dots">
-                  <span>.</span><span>.</span><span>.</span>
-                </div>
-              </div>
             )}
             <div ref={messagesEndRef} />
           </div>

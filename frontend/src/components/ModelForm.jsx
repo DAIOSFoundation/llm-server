@@ -106,7 +106,14 @@ const ModelForm = ({ config, onChange }) => {
       mirostatMode: 0, mirostatTau: 5.0, mirostatEta: 0.1,
       showSpecialTokens: false,
     };
-    setFormData({ ...defaults, ...config });
+    // config의 모든 값을 기본값으로 병합하여 undefined가 없도록 보장
+    const mergedConfig = { ...defaults };
+    if (config) {
+      Object.keys(defaults).forEach(key => {
+        mergedConfig[key] = config[key] !== undefined ? config[key] : defaults[key];
+      });
+    }
+    setFormData(mergedConfig);
   }, [config]);
 
   // 모델 선택이 바뀌면 자동 조회 상태를 초기화
@@ -424,7 +431,7 @@ const ModelForm = ({ config, onChange }) => {
           </div>
           <div className="form-group">
             <label>{t('settings.gpuLayers')}</label>
-            <input type="number" name="gpuLayers" value={formData.gpuLayers} onChange={handleChange} min="-1" />
+            <input type="number" name="gpuLayers" value={formData.gpuLayers ?? 0} onChange={handleChange} min="-1" />
           </div>
         </div>
       </div>
@@ -505,11 +512,11 @@ const ModelForm = ({ config, onChange }) => {
         <div className="form-grid">
           <div className="form-group">
             <label>{t('settings.contextSize')}</label>
-            <input type="number" name="contextSize" value={formData.contextSize} onChange={handleChange} min="1" />
+            <input type="number" name="contextSize" value={formData.contextSize ?? 2048} onChange={handleChange} min="1" />
           </div>
           <div className="form-group">
             <label>{t('settings.maxTokens')}</label>
-            <input type="number" name="maxTokens" value={formData.maxTokens} onChange={handleChange} min="-1" />
+            <input type="number" name="maxTokens" value={formData.maxTokens ?? 600} onChange={handleChange} min="-1" />
           </div>
         </div>
       </div>
@@ -517,30 +524,35 @@ const ModelForm = ({ config, onChange }) => {
       {/* Sampling Section */}
       <div className="form-section">
         <h3>{t('settings.sampling')}</h3>
+        {formData.modelFormat === 'mlx' && (
+          <div className="mlx-warning" style={{ marginBottom: '10px', padding: '8px', backgroundColor: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', color: '#856404' }}>
+            ⚠️ mlx_lm 서버에서 미제공: topK, tfsZ, typicalP
+          </div>
+        )}
         <div className="form-grid">
            <div className="form-group">
             <label>{t('settings.temperature')}</label>
-            <input type="number" name="temperature" value={formData.temperature} onChange={handleChange} step="0.01" min="0" />
+            <input type="number" name="temperature" value={formData.temperature ?? 0.7} onChange={handleChange} step="0.01" min="0" />
           </div>
           <div className="form-group">
             <label>{t('settings.topK')}</label>
-            <input type="number" name="topK" value={formData.topK} onChange={handleChange} min="1" />
+            <input type="number" name="topK" value={formData.topK ?? 40} onChange={handleChange} min="1" disabled={formData.modelFormat === 'mlx'} />
           </div>
           <div className="form-group">
             <label>{t('settings.topP')}</label>
-            <input type="number" name="topP" value={formData.topP} onChange={handleChange} step="0.01" min="0" max="1" />
+            <input type="number" name="topP" value={formData.topP ?? 0.95} onChange={handleChange} step="0.01" min="0" max="1" />
           </div>
           <div className="form-group">
             <label>{t('settings.minP')}</label>
-            <input type="number" name="minP" value={formData.minP} onChange={handleChange} step="0.01" min="0" max="1" />
+            <input type="number" name="minP" value={formData.minP ?? 0.05} onChange={handleChange} step="0.01" min="0" max="1" />
           </div>
           <div className="form-group">
             <label>{t('settings.tfsZ')}</label>
-            <input type="number" name="tfsZ" value={formData.tfsZ} onChange={handleChange} step="0.01" min="0" />
+            <input type="number" name="tfsZ" value={formData.tfsZ ?? 1.0} onChange={handleChange} step="0.01" min="0" disabled={formData.modelFormat === 'mlx'} />
           </div>
           <div className="form-group">
             <label>{t('settings.typicalP')}</label>
-            <input type="number" name="typicalP" value={formData.typicalP} onChange={handleChange} step="0.01" min="0" max="1" />
+            <input type="number" name="typicalP" value={formData.typicalP ?? 1.0} onChange={handleChange} step="0.01" min="0" max="1" disabled={formData.modelFormat === 'mlx'} />
           </div>
         </div>
       </div>
@@ -548,45 +560,50 @@ const ModelForm = ({ config, onChange }) => {
       {/* Penalties Section */}
       <div className="form-section">
         <h3>{t('settings.penalties')}</h3>
+        {formData.modelFormat === 'mlx' && (
+          <div className="mlx-warning" style={{ marginBottom: '10px', padding: '8px', backgroundColor: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', color: '#856404' }}>
+            ⚠️ mlx_lm 서버에서 미제공: frequencyPenalty, presencePenalty, dryMultiplier, dryBase, dryAllowedLength, dryPenaltyLastN, penalizeNL
+          </div>
+        )}
         <div className="form-grid">
           <div className="form-group">
             <label>{t('settings.repeatPenalty')}</label>
-            <input type="number" name="repeatPenalty" value={formData.repeatPenalty} onChange={handleChange} step="0.01" min="0" />
+            <input type="number" name="repeatPenalty" value={formData.repeatPenalty ?? 1.15} onChange={handleChange} step="0.01" min="0" />
           </div>
           <div className="form-group">
             <label>{t('settings.repeatLastN')}</label>
-            <input type="number" name="repeatLastN" value={formData.repeatLastN} onChange={handleChange} min="-1" />
+            <input type="number" name="repeatLastN" value={formData.repeatLastN ?? 128} onChange={handleChange} min="-1" />
           </div>
           <div className="form-group">
             <label>{t('settings.frequencyPenalty')}</label>
-            <input type="number" name="frequencyPenalty" value={formData.frequencyPenalty} onChange={handleChange} step="0.01" min="0" />
+            <input type="number" name="frequencyPenalty" value={formData.frequencyPenalty ?? 0.0} onChange={handleChange} step="0.01" min="0" disabled={formData.modelFormat === 'mlx'} />
           </div>
           <div className="form-group">
             <label>{t('settings.presencePenalty')}</label>
-            <input type="number" name="presencePenalty" value={formData.presencePenalty} onChange={handleChange} step="0.01" min="0" />
+            <input type="number" name="presencePenalty" value={formData.presencePenalty ?? 0.0} onChange={handleChange} step="0.01" min="0" disabled={formData.modelFormat === 'mlx'} />
           </div>
           
           {/* DRY Sampling Settings */}
           <div className="form-group">
             <label>{t('settings.dryMultiplier')}</label>
-            <input type="number" name="dryMultiplier" value={formData.dryMultiplier} onChange={handleChange} step="0.01" min="0" />
+            <input type="number" name="dryMultiplier" value={formData.dryMultiplier ?? 0.5} onChange={handleChange} step="0.01" min="0" disabled={formData.modelFormat === 'mlx'} />
           </div>
           <div className="form-group">
             <label>{t('settings.dryBase')}</label>
-            <input type="number" name="dryBase" value={formData.dryBase} onChange={handleChange} step="0.01" min="0" />
+            <input type="number" name="dryBase" value={formData.dryBase ?? 1.75} onChange={handleChange} step="0.01" min="0" disabled={formData.modelFormat === 'mlx'} />
           </div>
           <div className="form-group">
             <label>{t('settings.dryAllowedLength')}</label>
-            <input type="number" name="dryAllowedLength" value={formData.dryAllowedLength} onChange={handleChange} min="0" />
+            <input type="number" name="dryAllowedLength" value={formData.dryAllowedLength ?? 3} onChange={handleChange} min="0" disabled={formData.modelFormat === 'mlx'} />
           </div>
           <div className="form-group">
             <label>{t('settings.dryPenaltyLastN')}</label>
-            <input type="number" name="dryPenaltyLastN" value={formData.dryPenaltyLastN} onChange={handleChange} min="-1" />
+            <input type="number" name="dryPenaltyLastN" value={formData.dryPenaltyLastN ?? -1} onChange={handleChange} min="-1" disabled={formData.modelFormat === 'mlx'} />
           </div>
 
           <div className="form-group checkbox-group" style={{ gridColumn: '1 / -1' }}>
             <label htmlFor="penalizeNL">{t('settings.penalizeNL')}</label>
-            <input id="penalizeNL" type="checkbox" name="penalizeNL" checked={!!formData.penalizeNL} onChange={handleChange} />
+            <input id="penalizeNL" type="checkbox" name="penalizeNL" checked={!!formData.penalizeNL} onChange={handleChange} disabled={formData.modelFormat === 'mlx'} />
           </div>
         </div>
       </div>
@@ -594,10 +611,15 @@ const ModelForm = ({ config, onChange }) => {
       {/* Mirostat Section */}
       <div className="form-section">
         <h3>{t('settings.mirostat')}</h3>
+        {formData.modelFormat === 'mlx' && (
+          <div className="mlx-warning" style={{ marginBottom: '10px', padding: '8px', backgroundColor: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', color: '#856404' }}>
+            ⚠️ mlx_lm 서버에서 미제공: mirostatMode, mirostatTau, mirostatEta
+          </div>
+        )}
         <div className="form-grid">
           <div className="form-group">
             <label>{t('settings.mirostatMode')}</label>
-             <select name="mirostatMode" value={formData.mirostatMode} onChange={handleChange}>
+             <select name="mirostatMode" value={formData.mirostatMode} onChange={handleChange} disabled={formData.modelFormat === 'mlx'}>
               <option value="0">Disabled</option>
               <option value="1">Mirostat v1</option>
               <option value="2">Mirostat v2</option>
@@ -605,11 +627,11 @@ const ModelForm = ({ config, onChange }) => {
           </div>
           <div className="form-group">
             <label>{t('settings.mirostatTau')}</label>
-            <input type="number" name="mirostatTau" value={formData.mirostatTau} onChange={handleChange} step="0.1" min="0" />
+            <input type="number" name="mirostatTau" value={formData.mirostatTau ?? 5.0} onChange={handleChange} step="0.1" min="0" disabled={formData.modelFormat === 'mlx'} />
           </div>
           <div className="form-group">
             <label>{t('settings.mirostatEta')}</label>
-            <input type="number" name="mirostatEta" value={formData.mirostatEta} onChange={handleChange} step="0.01" min="0" />
+            <input type="number" name="mirostatEta" value={formData.mirostatEta ?? 0.1} onChange={handleChange} step="0.01" min="0" disabled={formData.modelFormat === 'mlx'} />
           </div>
         </div>
       </div>

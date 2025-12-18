@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import PerformancePanel from './PerformancePanel';
 import './LogPanel.css';
-import { getActiveServerUrl } from '../services/api';
+import { getActiveServerUrl, getActiveModelFormat } from '../services/api';
 
 const LogPanel = () => {
   const [activeTab, setActiveTab] = useState('performance');
   const [logs, setLogs] = useState(['Waiting for server logs...']);
   const logContainerRef = useRef(null);
+  const websocketRef = useRef(null);
 
   useEffect(() => {
     const handleLogMessage = (message) => {
@@ -34,89 +35,154 @@ const LogPanel = () => {
     };
   }, []);
 
-  // client-only: stream server logs via SSE (no polling)
+  // client-only: stream server logs via SSE (GGUF) or WebSocket (MLX)
   useEffect(() => {
     if (window.electronAPI) return;
 
-    const token = (() => {
-      try { return String(localStorage.getItem('llmServerUiAuthToken') || ''); } catch (_e) { return ''; }
-    })();
+    const modelFormat = getActiveModelFormat();
+    const useWebSocket = modelFormat === 'mlx';
 
-    const ctrl = new AbortController();
+    if (useWebSocket && typeof WebSocket === 'undefined') return;
+
     let stopped = false;
 
-    const run = async () => {
-      try {
-        const serverUrl = getActiveServerUrl();
-        const res = await fetch(`${serverUrl}/logs/stream`, {
-          method: 'GET',
-          headers: token ? { 'X-LLM-UI-Auth': token } : {},
-          signal: ctrl.signal,
-        });
+    const connect = () => {
+      if (stopped) return;
 
-        if (!res.ok || !res.body) {
-          return;
-        }
+      const serverUrl = getActiveServerUrl();
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        let buf = '';
-        let eventName = '';
-        let dataLines = [];
+      if (useWebSocket) {
+        // MLX 모델: WebSocket 사용
+        const wsUrl = serverUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+        const ws = new WebSocket(`${wsUrl}/logs/stream`);
+        websocketRef.current = ws;
 
-        const flush = () => {
-          if (eventName === 'log' && dataLines.length > 0) {
-            const data = dataLines.join('\n');
-            try {
-              const json = JSON.parse(data);
-              const line = String(json.text || '').trimEnd();
-              if (line) setLogs(prev => [...prev, line]);
-            } catch (_e) {
-              // ignore
-            }
-          }
-          eventName = '';
-          dataLines = [];
+        ws.onopen = () => {
+          // WebSocket 연결 성공
         };
 
-        while (!stopped) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-
-          // parse SSE by lines
-          let idx;
-          while ((idx = buf.indexOf('\n')) >= 0) {
-            const rawLine = buf.slice(0, idx);
-            buf = buf.slice(idx + 1);
-            const line = rawLine.replace(/\r$/, '');
-
-            if (line === '') {
-              flush();
-              continue;
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'log' && data.text) {
+              const line = String(data.text).trimEnd();
+              if (line) {
+                setLogs(prev => [...prev, line]);
+                // server-log 이벤트 브로드캐스트 (Header에서 프로그레스 파싱용)
+                window.dispatchEvent(new CustomEvent('server-log', { detail: line }));
+              }
             }
-            if (line.startsWith(':')) {
-              continue; // comment
-            }
-            if (line.startsWith('event:')) {
-              eventName = line.slice('event:'.length).trim();
-              continue;
-            }
-            if (line.startsWith('data:')) {
-              dataLines.push(line.slice('data:'.length).trimStart());
-            }
+          } catch (_e) {
+            // ignore
           }
-        }
-      } catch (_e) {
-        // ignore
+        };
+
+        ws.onerror = () => {
+          // 에러 발생 시 재연결
+          if (!stopped) {
+            setTimeout(connect, 1000);
+          }
+        };
+
+        ws.onclose = () => {
+          if (!stopped) {
+            setTimeout(connect, 1000);
+          }
+        };
+      } else {
+        // GGUF 모델: SSE 사용
+        const token = (() => {
+          try { return String(localStorage.getItem('llmServerUiAuthToken') || ''); } catch (_e) { return ''; }
+        })();
+
+        const ctrl = new AbortController();
+
+        const run = async () => {
+          try {
+            const res = await fetch(`${serverUrl}/logs/stream`, {
+              method: 'GET',
+              headers: token ? { 'X-LLM-UI-Auth': token } : {},
+              signal: ctrl.signal,
+            });
+
+            if (!res.ok || !res.body) {
+              return;
+            }
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let buf = '';
+            let eventName = '';
+            let dataLines = [];
+
+            const flush = () => {
+              if (eventName === 'log' && dataLines.length > 0) {
+                const data = dataLines.join('\n');
+                try {
+                  const json = JSON.parse(data);
+                  const line = String(json.text || '').trimEnd();
+                  if (line) {
+                    setLogs(prev => [...prev, line]);
+                    // server-log 이벤트 브로드캐스트 (Header에서 프로그레스 파싱용)
+                    window.dispatchEvent(new CustomEvent('server-log', { detail: line }));
+                  }
+                } catch (_e) {
+                  // ignore
+                }
+              }
+              eventName = '';
+              dataLines = [];
+            };
+
+            while (!stopped) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              buf += decoder.decode(value, { stream: true });
+
+              // parse SSE by lines
+              let idx;
+              while ((idx = buf.indexOf('\n')) >= 0) {
+                const rawLine = buf.slice(0, idx);
+                buf = buf.slice(idx + 1);
+                const line = rawLine.replace(/\r$/, '');
+
+                if (line === '') {
+                  flush();
+                  continue;
+                }
+                if (line.startsWith(':')) {
+                  continue; // comment
+                }
+                if (line.startsWith('event:')) {
+                  eventName = line.slice('event:'.length).trim();
+                  continue;
+                }
+                if (line.startsWith('data:')) {
+                  dataLines.push(line.slice('data:'.length).trimStart());
+                }
+              }
+            }
+          } catch (_e) {
+            // ignore
+          }
+        };
+
+        run();
+
+        return () => {
+          ctrl.abort();
+        };
       }
     };
 
-    run();
+    connect();
 
     return () => {
       stopped = true;
-      ctrl.abort();
+      if (websocketRef.current) {
+        try { websocketRef.current.close(); } catch (_e) {}
+        websocketRef.current = null;
+      }
     };
   }, []);
 

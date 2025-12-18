@@ -5,7 +5,7 @@ This project serves LLMs via **`llama.cpp`'s `llama-server`** (GGUF format) and 
 - **Client (UI)**: `frontend/` (React + Vite)
 - **Server (Inference/Router)**: 
   - `llama.cpp/build/bin/llama-server` (GGUF models, Router Mode recommended)
-  - `mlx/server-python.js` (MLX models, Python mlx_lm library)
+  - `mlx/server-python-direct.py` (MLX models, Python FastAPI + mlx_lm library)
 - **Desktop (optional)**: Electron wrapper (`npm run desktop`)
 
 ---
@@ -38,9 +38,9 @@ llm-server/
 │  └─ build/bin/llama-server      # GGUF server executable
 │
 ├─ mlx/                           # MLX server (Python 기반)
-│  ├─ server-python.js            # MLX HTTP server (port 8081)
-│  ├─ engine.py                   # Python mlx_lm 엔진
+│  ├─ server-python-direct.py    # MLX HTTP/WebSocket server (port 8081, FastAPI)
 │  ├─ requirements.txt            # Python 의존성
+│  ├─ venv/                       # Python 가상환경
 │  └─ models/                      # MLX model directory
 │
 ├─ native/                        # Metal VRAM monitoring native module
@@ -69,11 +69,11 @@ llm-server/
 - **Startup**: Auto-started by `start-client-server.js` or manually executed
 
 #### 2. MLX Server (Port 8081)
-- **Server File**: `mlx/server-python.js` (Python 기반)
-- **Python Engine**: `mlx/engine.py` (uses mlx_lm library)
-- **Functionality**: MLX format model loading and inference
-- **Startup**: Auto-started by `start-client-server.js` or manually executed
-- **Note**: Python 기반 서버는 mlx_lm 라이브러리를 사용하여 안정적으로 모델을 로드하고 추론을 수행합니다.
+- **Server File**: `mlx/server-python-direct.py` (FastAPI 기반 Python HTTP/WebSocket 서버)
+- **Framework**: FastAPI + Uvicorn
+- **Functionality**: MLX format model loading and inference with real-time WebSocket streaming
+- **Startup**: Auto-started by `start-client-server.js` (uses venv Python) or manually executed
+- **Note**: Python FastAPI 기반 서버는 mlx_lm 라이브러리를 사용하여 안정적으로 모델을 로드하고 추론을 수행하며, WebSocket을 통한 실시간 스트리밍을 지원합니다.
 
 #### 3. Authentication Server (Port 8082)
 - **Server File**: `auth-server.js`
@@ -96,7 +96,7 @@ llm-server/
   
   3. **Server Process Management**
      - GGUF Server: Spawns and manages `llama.cpp/build/bin/llama-server` process
-     - MLX Server: Spawns and manages `mlx/server-python.js` Node.js process
+     - MLX Server: Spawns and manages `mlx/server-python-direct.py` Python process (uses venv)
      - Handles server process termination and restart
   
   4. **Client Mode Support**
@@ -126,7 +126,7 @@ llm-server/
 #### MLX Python Library
 - **Installation**: `pip install mlx-lm mlx`
 - **Purpose**: MLX model loading and inference (Apple Silicon optimized)
-- **Integration**: Used via Python subprocess in `mlx/engine.py`
+- **Integration**: Used directly in `mlx/server-python-direct.py` (FastAPI server)
 
 #### Native VRAM Monitor
 - **Location**: `native/src/vram_monitor.cpp`
@@ -185,7 +185,7 @@ The application uses a **multi-server architecture** with separate ports for dif
   - Started via `start-client-server.js` with `--port 8080` flag
 - **MLX Server**: Port **8081** (default)
   - Uses MLX Python API (mlx_lm) server for MLX models
-  - Configured in `mlx/server-python.js` (default: 8081)
+  - Configured in `mlx/server-python-direct.py` (default: 8081, via PORT env var)
 - **Authentication Server**: Port **8082** (default)
   - Handles login/logout/setup independently
   - Runs even when model servers are down
@@ -196,7 +196,7 @@ The application uses a **multi-server architecture** with separate ports for dif
 ### Port Configuration
 
 - **GGUF Server Port**: Can be changed via `LLAMA_PORT` environment variable (default: 8080)
-- **MLX Server Port**: Hardcoded in `mlx/server-python.js` (default: 8081)
+- **MLX Server Port**: Configured via `PORT` environment variable in `mlx/server-python-direct.py` (default: 8081)
 - **Authentication Server Port**: Hardcoded in `auth-server.js` (default: 8082)
 - **Client Server Manager Port**: Hardcoded in `start-client-server.js` (default: 8083)
 
@@ -298,17 +298,18 @@ cd ../..
 
 ### 3) MLX 서버 설정 (MLX 모델 사용 시)
 
-MLX 서버는 Python 기반으로 동작합니다.
+MLX 서버는 Python FastAPI 기반으로 동작하며 WebSocket을 통한 실시간 스트리밍을 지원합니다.
 
 ```bash
-# Python 의존성 설치
+# Python 가상환경 생성 및 의존성 설치
 cd mlx
-pip3 install -r requirements.txt
-# 또는 직접 설치
-pip3 install mlx-lm mlx
+python3 -m venv venv
+source venv/bin/activate  # macOS/Linux
+# 또는 venv\Scripts\activate  # Windows
+pip install -r requirements.txt
 
-# 서버 실행
-node server-python.js
+# 서버 실행 (venv 활성화 후)
+python3 server-python-direct.py
 ```
 
 **장점:**
@@ -316,12 +317,15 @@ node server-python.js
 - ✅ 모델 구조 변경 시 `pip install -U mlx-lm`만으로 업데이트 가능
 - ✅ 안정성과 유지보수성 향상
 - ✅ DeepSeek-MoE 같은 복잡한 모델도 완벽하게 지원
+- ✅ WebSocket 기반 실시간 스트리밍 (토큰, 메트릭, 로그)
 
 **환경 변수:**
 ```bash
-# 모델 경로 지정 (선택사항)
+# 모델 경로 지정 (필수)
 export MLX_MODEL_PATH="./models/deepseek-moe-16b-chat-mlx-q4_0"
-node server-python.js
+# 포트 지정 (선택사항, 기본값: 8081)
+export PORT=8081
+python3 server-python-direct.py
 ```
 
 ### 4) Build Native Modules
