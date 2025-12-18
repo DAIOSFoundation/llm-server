@@ -53,12 +53,21 @@ class AIEngine {
         // Python 프로세스 실행
         // 가상환경을 쓴다면: 'venv/bin/python3'
         const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+        
+        // GPU 사용을 보장하기 위한 환경 변수 설정
+        const env = {
+            ...process.env,
+            MLX_MODEL_PATH: process.env.MLX_MODEL_PATH || './models/deepseek-moe-16b-chat-mlx-q4_0'
+        };
+        
+        // CPU 폴백 방지: MLX_DEFAULT_DEVICE가 cpu로 설정되어 있으면 제거
+        if (env.MLX_DEFAULT_DEVICE === 'cpu') {
+            delete env.MLX_DEFAULT_DEVICE;
+        }
+        
         this.process = spawn(pythonCmd, [enginePath], {
             cwd: __dirname,
-            env: {
-                ...process.env,
-                MLX_MODEL_PATH: process.env.MLX_MODEL_PATH || './models/deepseek-moe-16b-chat-mlx-q4_0'
-            }
+            env: env
         });
 
         // Python -> Node.js 메시지 수신
@@ -90,17 +99,29 @@ class AIEngine {
             this.broadcastLog(logMessage.trim());
         });
 
-        this.process.on('close', (code) => {
-            const logMessage = `[Engine] AI Engine process exited with code ${code}`;
+        this.process.on('close', (code, signal) => {
+            const logMessage = `[Engine] AI Engine process exited with code ${code}, signal ${signal}`;
             console.log(logMessage);
             this.broadcastLog(logMessage);
             this.ready = false;
-            // 프로세스가 종료되면 재시작 시도
-            if (code !== 0) {
-                const restartMessage = '[Engine] Restarting in 3 seconds...';
+            // 프로세스가 비정상 종료된 경우에만 재시작 시도
+            // code가 null이거나 undefined인 경우는 시그널로 종료된 것이므로 재시작하지 않음
+            // code가 0이 아닌 경우에만 재시작 (에러로 인한 종료)
+            if (code !== null && code !== undefined && code !== 0) {
+                const restartMessage = '[Engine] Process exited with error, restarting in 3 seconds...';
                 console.log(restartMessage);
                 this.broadcastLog(restartMessage);
                 setTimeout(() => this.start(), 3000);
+            } else if (code === null || code === undefined) {
+                // 시그널로 종료된 경우 (예: SIGTERM, SIGKILL)
+                const signalMessage = `[Engine] Process terminated by signal ${signal || 'unknown'}. Not restarting.`;
+                console.log(signalMessage);
+                this.broadcastLog(signalMessage);
+            } else {
+                // 정상 종료 (code === 0)
+                const normalExitMessage = '[Engine] Process exited normally. Not restarting.';
+                console.log(normalExitMessage);
+                this.broadcastLog(normalExitMessage);
             }
         });
 
@@ -520,14 +541,21 @@ app.get('/logs/stream', (req, res) => {
     res.write(`event: log\n`);
     res.write(`data: ${JSON.stringify({ text: '[Server] Connected to log stream' })}\n\n`);
     
-    // 연결 유지 (keep-alive)
+    // 연결 유지 (keep-alive) - SSE heartbeat 전송
     const keepAlive = setInterval(() => {
         if (res.writableEnded) {
             clearInterval(keepAlive);
             engine.removeListener(res);
             return;
         }
-    }, 30000); // 30초마다 keep-alive
+        // SSE heartbeat 전송 (빈 주석)
+        try {
+            res.write(':\n\n');
+        } catch (e) {
+            clearInterval(keepAlive);
+            engine.removeListener(res);
+        }
+    }, 15000); // 15초마다 heartbeat
     
     // 클라이언트 연결 종료 시 정리
     req.on('close', () => {

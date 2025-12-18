@@ -329,12 +329,48 @@ async function startMlxServer(modelConfig) {
       mlxModelConfig = null;
     });
     
+    // mlxServerInstance 설정 (서버가 이미 실행 중인지 확인하기 위해 필요)
+    mlxServerInstance = {
+      process: mlxServerProcess,
+      modelConfig: modelConfig
+    };
+    mlxModelConfig = modelConfig;
+    
     // 서버 시작 대기 (최대 30초)
     const startTimeout = setTimeout(() => {
       if (!serverStarted) {
         console.error(`[Client Server] ⚠️  MLX server start timeout`);
       }
     }, 30000);
+    
+    // mlxServerInstance를 먼저 설정하여 중복 시작 방지
+    mlxServerInstance = {
+      process: mlxServerProcess,
+      stop: async () => {
+        return new Promise((resolve) => {
+          if (mlxServerProcess) {
+            console.log(`[Client Server] Stopping MLX Python server...`);
+            mlxServerProcess.kill('SIGTERM');
+            
+            const timeout = setTimeout(() => {
+              if (mlxServerProcess && !mlxServerProcess.killed) {
+                mlxServerProcess.kill('SIGKILL');
+              }
+              resolve();
+            }, 5000);
+            
+            mlxServerProcess.once('exit', () => {
+              clearTimeout(timeout);
+              resolve();
+            });
+          } else {
+            resolve();
+          }
+        });
+      }
+    };
+    
+    mlxModelConfig = modelConfig;
     
     // Health check로 서버 시작 확인
     const checkHealth = setInterval(async () => {
@@ -371,34 +407,6 @@ async function startMlxServer(modelConfig) {
     setTimeout(() => {
       clearInterval(checkHealth);
     }, 30000);
-    
-    mlxServerInstance = {
-      process: mlxServerProcess,
-      stop: async () => {
-        return new Promise((resolve) => {
-          if (mlxServerProcess) {
-            console.log(`[Client Server] Stopping MLX Python server...`);
-            mlxServerProcess.kill('SIGTERM');
-            
-            const timeout = setTimeout(() => {
-              if (mlxServerProcess && !mlxServerProcess.killed) {
-                mlxServerProcess.kill('SIGKILL');
-              }
-              resolve();
-            }, 5000);
-            
-            mlxServerProcess.once('exit', () => {
-              clearTimeout(timeout);
-              resolve();
-            });
-          } else {
-            resolve();
-          }
-        });
-      }
-    };
-    
-    mlxModelConfig = modelConfig;
     console.log(`[Client Server] ✅ Server state updated: type=mlx-python, model=${modelConfig.id}`);
     console.log(`[Client Server]    Model path: ${modelPath}`);
     console.log(`[Client Server] ===== MLX SERVER START COMPLETE =====`);
