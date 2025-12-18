@@ -32,52 +32,52 @@ const TokenDebugPanel = () => {
 
     const handlePromptOutput = async (event) => {
       const prompt = event.detail?.prompt || '';
-      // console.log('[TokenDebug] prompt-output event received, prompt length:', prompt.length);
+      console.log('[TokenDebug] prompt-output event received, prompt length:', prompt.length);
       if (!prompt) {
-        // console.warn('[TokenDebug] Empty prompt, clearing tokens');
+        console.warn('[TokenDebug] Empty prompt, clearing tokens');
         setPromptTokens([]);
         return;
       }
       try {
-        // console.log('[TokenDebug] Calling tokenizeText for prompt...');
+        console.log('[TokenDebug] Calling tokenizeText for prompt...');
         const tokenData = await tokenizeText(prompt);
-        // console.log('[TokenDebug] tokenizeText returned:', tokenData?.length || 0, 'tokens');
+        console.log('[TokenDebug] tokenizeText returned:', tokenData?.length || 0, 'tokens');
         if (!tokenData || tokenData.length === 0) {
-          // console.warn('[TokenDebug] No tokens returned for prompt');
+          console.warn('[TokenDebug] No tokens returned for prompt');
           setPromptTokens([]);
           return;
         }
         const normalized = normalizeTokens(tokenData);
-        // console.log('[TokenDebug] Normalized tokens:', normalized.length);
+        console.log('[TokenDebug] Normalized tokens:', normalized.length);
         setPromptTokens(normalized);
       } catch (error) {
-        // console.error('[TokenDebug] Failed to tokenize prompt:', error);
+        console.error('[TokenDebug] Failed to tokenize prompt:', error);
         setPromptTokens([]);
       }
     };
 
     const handleAssistantOutput = async (event) => {
       const text = event.detail?.text || '';
-      // console.log('[TokenDebug] assistant-output event received, text length:', text.length);
+      console.log('[TokenDebug] assistant-output event received, text length:', text.length);
       if (!text) {
-        // console.warn('[TokenDebug] Empty text, clearing tokens');
+        console.warn('[TokenDebug] Empty text, clearing tokens');
         setResponseTokens([]);
         return;
       }
       try {
-        // console.log('[TokenDebug] Calling tokenizeText for assistant output...');
+        console.log('[TokenDebug] Calling tokenizeText for assistant output...');
         const tokenData = await tokenizeText(text);
-        // console.log('[TokenDebug] tokenizeText returned:', tokenData?.length || 0, 'tokens');
+        console.log('[TokenDebug] tokenizeText returned:', tokenData?.length || 0, 'tokens');
         if (!tokenData || tokenData.length === 0) {
-          // console.warn('[TokenDebug] No tokens returned for assistant output');
+          console.warn('[TokenDebug] No tokens returned for assistant output');
           setResponseTokens([]);
           return;
         }
         const normalized = normalizeTokens(tokenData);
-        // console.log('[TokenDebug] Normalized tokens:', normalized.length);
+        console.log('[TokenDebug] Normalized tokens:', normalized.length);
         setResponseTokens(normalized);
       } catch (error) {
-        // console.error('[TokenDebug] Failed to tokenize assistant output:', error);
+        console.error('[TokenDebug] Failed to tokenize assistant output:', error);
         setResponseTokens([]);
       }
     };

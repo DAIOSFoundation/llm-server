@@ -379,7 +379,7 @@ const Header = () => {
     <>
       <header className="app-header">
         <div className="header-left">
-          <h1>LLM Server</h1>
+          <h1>LLM Lab</h1>
           <nav>
             <NavLink to="/" className={({ isActive }) => (isActive ? 'active' : '')}>
               Chat

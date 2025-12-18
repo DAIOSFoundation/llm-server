@@ -9,6 +9,7 @@ import json
 import asyncio
 import time
 import psutil
+import re
 from pathlib import Path
 from typing import Optional, List
 from contextlib import asynccontextmanager
@@ -431,6 +432,7 @@ async def chat(request: Request):
                 
                 # 프롬프트 토큰화
                 prompt_tokens = tokenizer.encode(prompt_formatted)
+                prompt_tokens_list = prompt_tokens.tolist() if hasattr(prompt_tokens, 'tolist') else list(prompt_tokens)
                 prompt_array = mx.array(prompt_tokens)
                 
                 # 샘플러 생성 (mlx_lm 0.29+ 버전용)
@@ -451,9 +453,9 @@ async def chat(request: Request):
                 tokens_generated = 0
                 eos_token_id = getattr(tokenizer, 'eos_token_id', None)
                 
-                # 토큰 누적을 위한 리스트 (올바른 디코딩을 위해)
+                # 토큰 누적을 위한 리스트 (생성된 토큰만 포함)
                 accumulated_tokens = []
-                previous_decoded_text = ""
+                previous_full_text = ""
                 
                 step_generator = generate_step(
                     prompt_array,
@@ -493,29 +495,39 @@ async def chat(request: Request):
                     
                     # 누적된 토큰들을 디코딩 (멀티바이트 문자 올바른 처리)
                     try:
-                        # 전체 시퀀스를 디코딩
-                        current_decoded_text = tokenizer.decode(accumulated_tokens, skip_special_tokens=True)
+                        # 생성된 토큰만 디코딩 (프롬프트 제외, 스페셜 토큰 제거)
+                        current_full_text = tokenizer.decode(accumulated_tokens, skip_special_tokens=True)
                         
-                        # 이전 디코딩 결과와 비교하여 새로운 부분만 추출
-                        if previous_decoded_text and current_decoded_text.startswith(previous_decoded_text):
-                            token_text = current_decoded_text[len(previous_decoded_text):]
+                        # 스페셜 토큰 패턴 제거 (혹시 모를 경우 대비)
+                        current_full_text = re.sub(r'<\|[^>]*\|>', '', current_full_text)
+                        
+                        # 이전 전체 텍스트와 비교하여 새로운 부분만 추출
+                        if previous_full_text:
+                            if current_full_text.startswith(previous_full_text):
+                                token_text = current_full_text[len(previous_full_text):]
+                            else:
+                                # 시작 부분이 다르면 빈 문자열 (누적 방지)
+                                token_text = ""
                         else:
-                            # 시작 부분이 다르면 전체를 사용 (특수 토큰 처리 등)
-                            token_text = current_decoded_text
+                            # 첫 토큰인 경우
+                            token_text = current_full_text
+                        
+                        # 추출된 텍스트에서도 스페셜 토큰 제거
+                        if token_text:
+                            token_text = re.sub(r'<\|[^>]*\|>', '', token_text)
                         
                         # UTF-8 인코딩 보장
                         if isinstance(token_text, bytes):
                             token_text = token_text.decode('utf-8', errors='replace')
-                        elif isinstance(token_text, str):
-                            # UTF-8로 재인코딩하여 깨진 문자 확인
-                            token_text = token_text.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
                         
-                        # previous_decoded_text 업데이트 (다음 비교를 위해)
-                        previous_decoded_text = current_decoded_text
+                        # previous_full_text 업데이트 (다음 비교를 위해)
+                        if token_text:
+                            previous_full_text = current_full_text
                     except Exception as e:
                         # 디코딩 실패 시 빈 문자열 사용
                         token_text = ""
-                        previous_decoded_text = ""
+                        if not previous_full_text:
+                            previous_full_text = ""
                     
                     # SSE 형식으로 전송 (ensure_ascii=False로 한글 등 유니코드 문자 보존)
                     if token_text:  # 빈 문자열이 아닐 때만 전송
@@ -614,6 +626,7 @@ async def chat_websocket(websocket: WebSocket):
             
             # 프롬프트 토큰화
             prompt_tokens = tokenizer.encode(prompt_formatted)
+            prompt_tokens_list = prompt_tokens.tolist() if hasattr(prompt_tokens, 'tolist') else list(prompt_tokens)
             prompt_array = mx.array(prompt_tokens)
             
             # 샘플러 생성 (mlx_lm 0.29+ 버전용)
@@ -632,9 +645,9 @@ async def chat_websocket(websocket: WebSocket):
             token_count = 0
             eos_token_id = getattr(tokenizer, 'eos_token_id', None)
             
-            # 토큰 누적을 위한 리스트 (올바른 디코딩을 위해)
+            # 토큰 누적을 위한 리스트 (생성된 토큰만 포함)
             accumulated_tokens = []
-            previous_decoded_text = ""
+            previous_full_text = ""
             
             step_generator = generate_step(
                 prompt_array,
@@ -674,27 +687,39 @@ async def chat_websocket(websocket: WebSocket):
                 
                 # 누적된 토큰들을 디코딩 (멀티바이트 문자 올바른 처리)
                 try:
-                    # 전체 시퀀스를 디코딩
-                    current_decoded_text = tokenizer.decode(accumulated_tokens, skip_special_tokens=True)
+                    # 생성된 토큰만 디코딩 (프롬프트 제외, 스페셜 토큰 제거)
+                    current_full_text = tokenizer.decode(accumulated_tokens, skip_special_tokens=True)
                     
-                    # 이전 디코딩 결과와 비교하여 새로운 부분만 추출
-                    if current_decoded_text.startswith(previous_decoded_text):
-                        token_text = current_decoded_text[len(previous_decoded_text):]
+                    # 스페셜 토큰 패턴 제거 (혹시 모를 경우 대비)
+                    current_full_text = re.sub(r'<\|[^>]*\|>', '', current_full_text)
+                    
+                    # 이전 전체 텍스트와 비교하여 새로운 부분만 추출
+                    if previous_full_text:
+                        if current_full_text.startswith(previous_full_text):
+                            token_text = current_full_text[len(previous_full_text):]
+                        else:
+                            # 시작 부분이 다르면 빈 문자열 (누적 방지)
+                            token_text = ""
                     else:
-                        # 시작 부분이 다르면 전체를 사용 (특수 토큰 처리 등)
-                        token_text = current_decoded_text
+                        # 첫 토큰인 경우
+                        token_text = current_full_text
+                    
+                    # 추출된 텍스트에서도 스페셜 토큰 제거
+                    if token_text:
+                        token_text = re.sub(r'<\|[^>]*\|>', '', token_text)
                     
                     # UTF-8 인코딩 보장
                     if isinstance(token_text, bytes):
                         token_text = token_text.decode('utf-8', errors='replace')
-                    elif isinstance(token_text, str):
-                        # UTF-8로 재인코딩하여 깨진 문자 확인
-                        token_text = token_text.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
                     
-                    previous_decoded_text = current_decoded_text
+                    # previous_full_text 업데이트 (다음 비교를 위해)
+                    if token_text:
+                        previous_full_text = current_full_text
                 except Exception as e:
                     # 디코딩 실패 시 빈 문자열 사용
                     token_text = ""
+                    if not previous_full_text:
+                        previous_full_text = ""
                 
                 # WebSocket으로 실시간 전송 (ensure_ascii=False로 한글 등 유니코드 문자 보존)
                 if token_text:  # 빈 문자열이 아닐 때만 전송
@@ -785,6 +810,7 @@ async def completion(request: Request):
                 
                 # 프롬프트 토큰화
                 prompt_tokens = tokenizer.encode(prompt_formatted)
+                prompt_tokens_list = prompt_tokens.tolist() if hasattr(prompt_tokens, 'tolist') else list(prompt_tokens)
                 prompt_array = mx.array(prompt_tokens)
                 
                 # 샘플러 생성 (mlx_lm 0.29+ 버전용)
@@ -812,9 +838,9 @@ async def completion(request: Request):
                     except:
                         pass
                 
-                # 토큰 누적을 위한 리스트 (올바른 디코딩을 위해)
+                # 토큰 누적을 위한 리스트 (생성된 토큰만 포함)
                 accumulated_tokens = []
-                previous_decoded_text = ""
+                previous_full_text = ""
                 
                 step_generator = generate_step(
                     prompt_array,
@@ -860,29 +886,39 @@ async def completion(request: Request):
                     
                     # 누적된 토큰들을 디코딩 (멀티바이트 문자 올바른 처리)
                     try:
-                        # 전체 시퀀스를 디코딩
-                        current_decoded_text = tokenizer.decode(accumulated_tokens, skip_special_tokens=True)
+                        # 생성된 토큰만 디코딩 (프롬프트 제외, 스페셜 토큰 제거)
+                        current_full_text = tokenizer.decode(accumulated_tokens, skip_special_tokens=True)
                         
-                        # 이전 디코딩 결과와 비교하여 새로운 부분만 추출
-                        if previous_decoded_text and current_decoded_text.startswith(previous_decoded_text):
-                            token_text = current_decoded_text[len(previous_decoded_text):]
+                        # 스페셜 토큰 패턴 제거 (혹시 모를 경우 대비)
+                        current_full_text = re.sub(r'<\|[^>]*\|>', '', current_full_text)
+                        
+                        # 이전 전체 텍스트와 비교하여 새로운 부분만 추출
+                        if previous_full_text:
+                            if current_full_text.startswith(previous_full_text):
+                                token_text = current_full_text[len(previous_full_text):]
+                            else:
+                                # 시작 부분이 다르면 빈 문자열 (누적 방지)
+                                token_text = ""
                         else:
-                            # 시작 부분이 다르면 전체를 사용 (특수 토큰 처리 등)
-                            token_text = current_decoded_text
+                            # 첫 토큰인 경우
+                            token_text = current_full_text
+                        
+                        # 추출된 텍스트에서도 스페셜 토큰 제거
+                        if token_text:
+                            token_text = re.sub(r'<\|[^>]*\|>', '', token_text)
                         
                         # UTF-8 인코딩 보장
                         if isinstance(token_text, bytes):
                             token_text = token_text.decode('utf-8', errors='replace')
-                        elif isinstance(token_text, str):
-                            # UTF-8로 재인코딩하여 깨진 문자 확인
-                            token_text = token_text.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
                         
-                        # previous_decoded_text 업데이트 (다음 비교를 위해)
-                        previous_decoded_text = current_decoded_text
+                        # previous_full_text 업데이트 (다음 비교를 위해)
+                        if token_text:
+                            previous_full_text = current_full_text
                     except Exception as e:
                         # 디코딩 실패 시 빈 문자열 사용
                         token_text = ""
-                        previous_decoded_text = ""
+                        if not previous_full_text:
+                            previous_full_text = ""
                     
                     # llama.cpp 형식으로 SSE 전송 (ensure_ascii=False로 한글 등 유니코드 문자 보존)
                     if token_text:  # 빈 문자열이 아닐 때만 전송
@@ -962,20 +998,57 @@ async def tokenize(request: Request):
         if with_pieces:
             # 각 토큰의 piece(텍스트) 정보 포함
             token_data = []
-            for token_id in token_list:
+            # 전체 시퀀스를 먼저 디코딩하여 올바른 UTF-8 처리를 보장
+            try:
+                full_decoded = tokenizer.decode(token_list, skip_special_tokens=False)
+            except Exception:
+                full_decoded = ""
+            
+            # 각 토큰을 개별적으로 디코딩 시도
+            for idx, token_id in enumerate(token_list):
                 try:
                     # 개별 토큰 디코딩 (스페셜 토큰 포함)
                     piece = tokenizer.decode([token_id], skip_special_tokens=False)
+                    
+                    # UTF-8 인코딩 보장 (재인코딩 제거 - 이미 올바른 UTF-8 문자열)
+                    if isinstance(piece, bytes):
+                        piece = piece.decode('utf-8', errors='replace')
+                    # str 타입이면 그대로 사용 (불필요한 재인코딩 제거)
+                    
                     token_data.append({
                         "id": token_id,
                         "piece": piece
                     })
                 except Exception as e:
-                    # 디코딩 실패 시 토큰 ID만 포함
-                    token_data.append({
-                        "id": token_id,
-                        "piece": f"<token_{token_id}>"
-                    })
+                    # 개별 토큰 디코딩 실패 시, 전체 시퀀스에서 해당 위치 추출 시도
+                    try:
+                        # 이전 토큰까지 디코딩
+                        prev_tokens = token_list[:idx]
+                        # 현재 토큰 포함 디코딩
+                        curr_tokens = token_list[:idx+1]
+                        if prev_tokens:
+                            prev_text = tokenizer.decode(prev_tokens, skip_special_tokens=False)
+                            curr_text = tokenizer.decode(curr_tokens, skip_special_tokens=False)
+                            piece = curr_text[len(prev_text):]
+                        else:
+                            piece = tokenizer.decode([token_id], skip_special_tokens=False)
+                        
+                        # UTF-8 인코딩 보장
+                        if isinstance(piece, bytes):
+                            piece = piece.decode('utf-8', errors='replace')
+                        elif isinstance(piece, str):
+                            piece = piece.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+                        
+                        token_data.append({
+                            "id": token_id,
+                            "piece": piece
+                        })
+                    except Exception:
+                        # 모든 디코딩 실패 시 토큰 ID만 포함
+                        token_data.append({
+                            "id": token_id,
+                            "piece": f"<token_{token_id}>"
+                        })
             
             return {
                 "tokens": token_data,

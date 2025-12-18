@@ -238,19 +238,27 @@ const ChatPage = () => {
       }, language, showSpecialTokens);
 
       // 스트리밍이 끝난 후 마지막 assistant 응답 전체를 디버그용으로 브로드캐스트
-      // 메시지 상태에서 최종 content를 가져옴
-      setMessages(prev => {
-        const lastMessage = prev[prev.length - 1];
-        if (lastMessage && lastMessage.role === 'assistant' && lastMessage.content) {
-          // console.log('[ChatPage] Dispatching assistant-output event, text length:', lastMessage.content.length);
+      // assistantOutputRef에 누적된 텍스트를 사용 (메시지 상태는 비동기적으로 업데이트될 수 있음)
+      setTimeout(() => {
+        const finalText = assistantOutputRef.current || '';
+        if (finalText) {
+          // console.log('[ChatPage] Dispatching assistant-output event, text length:', finalText.length);
           window.dispatchEvent(new CustomEvent('assistant-output', {
-            detail: { text: lastMessage.content },
+            detail: { text: finalText },
           }));
         } else {
-          // console.warn('[ChatPage] No assistant message content, not dispatching assistant-output event');
+          // 메시지 상태에서 가져오기 시도
+          setMessages(prev => {
+            const lastMessage = prev[prev.length - 1];
+            if (lastMessage && lastMessage.role === 'assistant' && lastMessage.content) {
+              window.dispatchEvent(new CustomEvent('assistant-output', {
+                detail: { text: lastMessage.content },
+              }));
+            }
+            return prev;
+          });
         }
-        return prev;
-      });
+      }, 100);
     } catch (error) {
       console.error('채팅 오류:', error);
       setIsWaitingForFirstToken(false);
@@ -313,17 +321,14 @@ const ChatPage = () => {
               messages.map((msg, index) => {
                 // 스페셜 토큰 하이라이트 함수
                 const renderContent = (content) => {
+                  // 스페셜 토큰 제거 (챗 버블에는 스페셜 토큰이 표시되면 안됨)
+                  let cleanedContent = content.replace(/<\|[^>]*\|>/g, '');
+                  
                   if (!showSpecialTokens) {
-                    return content;
+                    return cleanedContent;
                   }
-                  // 스페셜 토큰 패턴 찾기: <|...|> (|>로 끝나는 모든 패턴)
-                  const parts = content.split(/(<\|[^>]*\|>)/g);
-                  return parts.map((part, i) => {
-                    if (part.match(/^<\|[^>]*\|>$/)) {
-                      return <span key={i} className="special-token">{part}</span>;
-                    }
-                    return part;
-                  });
+                  // 스페셜 토큰 표시가 켜져있어도 챗 버블에는 표시하지 않음
+                  return cleanedContent;
                 };
 
                 // assistant 메시지이고 content가 비어있고 첫 토큰을 기다리는 중이면 로딩 애니메이션 표시

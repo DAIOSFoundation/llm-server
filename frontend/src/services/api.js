@@ -403,7 +403,7 @@ export const countTokens = async (prompt) => {
 export const tokenizeText = async (content) => {
   try {
     if (!content || content.trim() === '') {
-      // console.warn('[API] tokenizeText: Empty content');
+      console.warn('[API] tokenizeText: Empty content');
       return [];
     }
     
@@ -411,7 +411,7 @@ export const tokenizeText = async (content) => {
     const model = (config.modelPath || '').trim();
     const serverUrl = getActiveServerUrl();
     
-    // console.log('[API] tokenizeText: Calling', `${serverUrl}/tokenize`, 'with content length:', content.length);
+    console.log('[API] tokenizeText: Calling', `${serverUrl}/tokenize`, 'with content length:', content.length);
     
     const response = await fetch(`${serverUrl}/tokenize`, {
       method: 'POST',
@@ -429,20 +429,20 @@ export const tokenizeText = async (content) => {
 
     if (!response.ok) {
       const errorText = await response.text();
-      // console.warn('[API] Tokenize API (with_pieces) failed:', response.status, errorText);
+      console.warn('[API] Tokenize API (with_pieces) failed:', response.status, errorText);
       return [];
     }
 
     const data = await response.json();
-    // console.log('[API] tokenizeText: Response received:', data.tokens?.length || 0, 'tokens');
+    console.log('[API] tokenizeText: Response received:', data.tokens?.length || 0, 'tokens', 'data:', data);
     if (data.tokens && Array.isArray(data.tokens)) {
       return data.tokens;
     }
 
-    // console.warn('[API] Unexpected tokenize (with_pieces) response format:', data);
+    console.warn('[API] Unexpected tokenize (with_pieces) response format:', data);
     return [];
   } catch (error) {
-    // console.warn('[API] Tokenize (with_pieces) error:', error);
+    console.warn('[API] Tokenize (with_pieces) error:', error);
     return [];
   }
 };

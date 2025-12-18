@@ -107,7 +107,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background-color: #888;
+  background-color: white;
   animation: loading-bounce 1.4s ease-in-out infinite;
 }
 
