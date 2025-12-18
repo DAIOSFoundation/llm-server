@@ -502,14 +502,10 @@ async def chat(request: Request):
                         current_full_text = re.sub(r'<\|[^>]*\|>', '', current_full_text)
                         
                         # 이전 전체 텍스트와 비교하여 새로운 부분만 추출
-                        if previous_full_text:
-                            if current_full_text.startswith(previous_full_text):
-                                token_text = current_full_text[len(previous_full_text):]
-                            else:
-                                # 시작 부분이 다르면 빈 문자열 (누적 방지)
-                                token_text = ""
+                        if previous_full_text and current_full_text.startswith(previous_full_text):
+                            token_text = current_full_text[len(previous_full_text):]
                         else:
-                            # 첫 토큰인 경우
+                            # 시작 부분이 다르면 전체를 사용 (첫 토큰이거나 특수 토큰 처리 등)
                             token_text = current_full_text
                         
                         # 추출된 텍스트에서도 스페셜 토큰 제거
@@ -521,8 +517,7 @@ async def chat(request: Request):
                             token_text = token_text.decode('utf-8', errors='replace')
                         
                         # previous_full_text 업데이트 (다음 비교를 위해)
-                        if token_text:
-                            previous_full_text = current_full_text
+                        previous_full_text = current_full_text
                     except Exception as e:
                         # 디코딩 실패 시 빈 문자열 사용
                         token_text = ""
@@ -694,14 +689,10 @@ async def chat_websocket(websocket: WebSocket):
                     current_full_text = re.sub(r'<\|[^>]*\|>', '', current_full_text)
                     
                     # 이전 전체 텍스트와 비교하여 새로운 부분만 추출
-                    if previous_full_text:
-                        if current_full_text.startswith(previous_full_text):
-                            token_text = current_full_text[len(previous_full_text):]
-                        else:
-                            # 시작 부분이 다르면 빈 문자열 (누적 방지)
-                            token_text = ""
+                    if previous_full_text and current_full_text.startswith(previous_full_text):
+                        token_text = current_full_text[len(previous_full_text):]
                     else:
-                        # 첫 토큰인 경우
+                        # 시작 부분이 다르면 전체를 사용 (첫 토큰이거나 특수 토큰 처리 등)
                         token_text = current_full_text
                     
                     # 추출된 텍스트에서도 스페셜 토큰 제거
@@ -713,13 +704,11 @@ async def chat_websocket(websocket: WebSocket):
                         token_text = token_text.decode('utf-8', errors='replace')
                     
                     # previous_full_text 업데이트 (다음 비교를 위해)
-                    if token_text:
-                        previous_full_text = current_full_text
+                    previous_full_text = current_full_text
                 except Exception as e:
                     # 디코딩 실패 시 빈 문자열 사용
                     token_text = ""
-                    if not previous_full_text:
-                        previous_full_text = ""
+                    previous_full_text = ""
                 
                 # WebSocket으로 실시간 전송 (ensure_ascii=False로 한글 등 유니코드 문자 보존)
                 if token_text:  # 빈 문자열이 아닐 때만 전송
@@ -893,14 +882,10 @@ async def completion(request: Request):
                         current_full_text = re.sub(r'<\|[^>]*\|>', '', current_full_text)
                         
                         # 이전 전체 텍스트와 비교하여 새로운 부분만 추출
-                        if previous_full_text:
-                            if current_full_text.startswith(previous_full_text):
-                                token_text = current_full_text[len(previous_full_text):]
-                            else:
-                                # 시작 부분이 다르면 빈 문자열 (누적 방지)
-                                token_text = ""
+                        if previous_full_text and current_full_text.startswith(previous_full_text):
+                            token_text = current_full_text[len(previous_full_text):]
                         else:
-                            # 첫 토큰인 경우
+                            # 시작 부분이 다르면 전체를 사용 (첫 토큰이거나 특수 토큰 처리 등)
                             token_text = current_full_text
                         
                         # 추출된 텍스트에서도 스페셜 토큰 제거
@@ -912,13 +897,11 @@ async def completion(request: Request):
                             token_text = token_text.decode('utf-8', errors='replace')
                         
                         # previous_full_text 업데이트 (다음 비교를 위해)
-                        if token_text:
-                            previous_full_text = current_full_text
+                        previous_full_text = current_full_text
                     except Exception as e:
                         # 디코딩 실패 시 빈 문자열 사용
                         token_text = ""
-                        if not previous_full_text:
-                            previous_full_text = ""
+                        previous_full_text = ""
                     
                     # llama.cpp 형식으로 SSE 전송 (ensure_ascii=False로 한글 등 유니코드 문자 보존)
                     if token_text:  # 빈 문자열이 아닐 때만 전송
