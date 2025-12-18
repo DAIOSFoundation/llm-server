@@ -114,9 +114,18 @@ const ChatPage = () => {
           signal: AbortSignal.timeout(1000),
         });
         if (response.ok) {
-          setIsModelLoading(false);
-          retryCount = 0; // 성공 시 리트라이 카운트 리셋
-          hasRequestedStart = false; // 성공 시 플래그 리셋
+          const data = await response.json().catch(() => ({}));
+          // status가 "loading"이면 모델이 아직 로딩 중
+          if (data.status === 'loading') {
+            setIsModelLoading(true);
+          } else if (data.status === 'ready') {
+            setIsModelLoading(false);
+            retryCount = 0; // 성공 시 리트라이 카운트 리셋
+            hasRequestedStart = false; // 성공 시 플래그 리셋
+          } else {
+            // 기본적으로 ready로 간주
+            setIsModelLoading(false);
+          }
           return;
         }
       } catch (error) {

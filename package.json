@@ -13,10 +13,9 @@
     "server:all": "concurrently \"npm run server\" \"npm run server:mlx-proxy\"",
     "desktop": "wait-on http://localhost:5173 && electron .",
     "start": "npm run client:all",
-    "build": "npm run build:native && vite build --prefix frontend && electron-builder",
-    "build:native": "cd native && npm install && npm run build && cd ../mlx && npm install && npm run build",
-    "rebuild:native": "cd native && npm run build && cd ../mlx && npm run build",
-    "build:mlx": "cd mlx && npm install && npm run build",
+    "build": "vite build --prefix frontend && electron-builder",
+    "build:native": "cd native && npm install && npm run build",
+    "rebuild:native": "cd native && npm run build",
     "postinstall": "npm run build:native"
   },
   "keywords": [],

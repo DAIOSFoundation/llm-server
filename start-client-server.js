@@ -105,16 +105,34 @@ function stopMlxServer() {
   return new Promise((resolve) => {
     if (mlxServerInstance) {
       console.log(`[Client Server] Stopping MLX server`);
-      mlxServerInstance.stop().then(() => {
+      if (mlxServerInstance.stop && typeof mlxServerInstance.stop === 'function') {
+        mlxServerInstance.stop().then(() => {
+          mlxServerInstance = null;
+          mlxModelConfig = null;
+          resolve();
+        }).catch((error) => {
+          console.error(`[Client Server] Error stopping MLX server:`, error);
+          mlxServerInstance = null;
+          mlxModelConfig = null;
+          resolve();
+        });
+      } else if (mlxServerInstance.process) {
+        // Python 서버 프로세스 직접 종료
+        console.log(`[Client Server] Killing MLX Python server process...`);
+        mlxServerInstance.process.kill('SIGTERM');
+        setTimeout(() => {
+          if (mlxServerInstance && mlxServerInstance.process && !mlxServerInstance.process.killed) {
+            mlxServerInstance.process.kill('SIGKILL');
+          }
+          mlxServerInstance = null;
+          mlxModelConfig = null;
+          resolve();
+        }, 2000);
+      } else {
         mlxServerInstance = null;
         mlxModelConfig = null;
         resolve();
-      }).catch((error) => {
-        console.error(`[Client Server] Error stopping MLX server:`, error);
-        mlxServerInstance = null;
-        mlxModelConfig = null;
-        resolve();
-      });
+      }
     } else {
       resolve();
     }
@@ -233,28 +251,156 @@ function startGgufServer(modelConfig) {
   console.log(`[Client Server] ===== GGUF SERVER START COMPLETE =====`);
 }
 
-// MLX 서버 시작
+// MLX 서버 시작 (Python 기반)
 async function startMlxServer(modelConfig) {
-  console.log(`[Client Server] ===== MLX SERVER START =====`);
+  console.log(`[Client Server] ===== MLX SERVER START (Python) =====`);
   console.log(`[Client Server] Model ID: ${modelConfig.id}`);
   console.log(`[Client Server] Model Path: ${modelConfig.modelPath}`);
   
-  const MlxServer = require(path.join(__dirname, 'mlx', 'server'));
+  const serverScriptPath = path.join(__dirname, 'mlx', 'server-python.js');
+  
+  if (!fs.existsSync(serverScriptPath)) {
+    console.error(`[Client Server] ❌ Python server script not found: ${serverScriptPath}`);
+    mlxModelConfig = null;
+    mlxServerInstance = null;
+    return;
+  }
+  
+  // 모델 경로 설정
+  let modelPath = modelConfig.modelPath;
+  if (!path.isAbsolute(modelPath)) {
+    modelPath = path.join(__dirname, 'mlx', 'models', modelPath);
+  }
+  
+  if (!fs.existsSync(modelPath)) {
+    console.error(`[Client Server] ❌ Model path not found: ${modelPath}`);
+    mlxModelConfig = null;
+    mlxServerInstance = null;
+    return;
+  }
   
   try {
-    currentModelConfig = modelConfig;
-    console.log(`[Client Server] Creating MLX server instance...`);
+    console.log(`[Client Server] Starting Python-based MLX server...`);
+    console.log(`[Client Server]    Server script: ${serverScriptPath}`);
+    console.log(`[Client Server]    Model path: ${modelPath}`);
     
-    const mlxServer = new MlxServer(modelConfig);
-    console.log(`[Client Server] Starting MLX server (async)...`);
-    await mlxServer.start();
+    const mlxServerProcess = spawn('node', [serverScriptPath], {
+      cwd: path.join(__dirname, 'mlx'),
+      stdio: 'pipe',
+      env: {
+        ...process.env,
+        MLX_MODEL_PATH: modelPath,
+        PORT: '8081'
+      }
+    });
     
-    console.log(`[Client Server] ✅ MLX server started successfully`);
-    mlxServerInstance = mlxServer;
+    let serverOutput = '';
+    let serverStarted = false;
+    
+    mlxServerProcess.stdout.on('data', (data) => {
+      const output = data.toString();
+      serverOutput += output;
+      console.log(`[MLX Server] ${output}`);
+      
+      // 서버 시작 확인
+      if (output.includes('MLX Python-based server started on port') || 
+          output.includes('Server started on port')) {
+        if (!serverStarted) {
+          serverStarted = true;
+          console.log(`[Client Server] ✅ MLX Python server started successfully`);
+        }
+      }
+    });
+    
+    mlxServerProcess.stderr.on('data', (data) => {
+      const output = data.toString();
+      console.error(`[MLX Server Error] ${output}`);
+    });
+    
+    mlxServerProcess.on('close', (code) => {
+      console.log(`[Client Server] ⚠️  MLX server process exited with code ${code}`);
+      mlxServerInstance = null;
+      mlxModelConfig = null;
+    });
+    
+    mlxServerProcess.on('error', (error) => {
+      console.error(`[Client Server] ❌ Failed to start MLX server:`, error);
+      mlxServerInstance = null;
+      mlxModelConfig = null;
+    });
+    
+    // 서버 시작 대기 (최대 30초)
+    const startTimeout = setTimeout(() => {
+      if (!serverStarted) {
+        console.error(`[Client Server] ⚠️  MLX server start timeout`);
+      }
+    }, 30000);
+    
+    // Health check로 서버 시작 확인
+    const checkHealth = setInterval(async () => {
+      try {
+        const response = await new Promise((resolve, reject) => {
+          const req = http.get('http://localhost:8081/health', (res) => {
+            let data = '';
+            res.on('data', (chunk) => { data += chunk; });
+            res.on('end', () => {
+              resolve({ statusCode: res.statusCode, data });
+            });
+          });
+          req.on('error', reject);
+          req.setTimeout(2000, () => {
+            req.destroy();
+            reject(new Error('Health check timeout'));
+          });
+        });
+        
+        if (response.statusCode === 200 || response.statusCode === 503) {
+          clearInterval(checkHealth);
+          clearTimeout(startTimeout);
+          if (!serverStarted) {
+            serverStarted = true;
+            console.log(`[Client Server] ✅ MLX Python server started (confirmed via health check)`);
+          }
+        }
+      } catch (error) {
+        // 서버가 아직 시작되지 않음 - 계속 대기
+      }
+    }, 1000);
+    
+    // 30초 후 health check 중지
+    setTimeout(() => {
+      clearInterval(checkHealth);
+    }, 30000);
+    
+    mlxServerInstance = {
+      process: mlxServerProcess,
+      stop: async () => {
+        return new Promise((resolve) => {
+          if (mlxServerProcess) {
+            console.log(`[Client Server] Stopping MLX Python server...`);
+            mlxServerProcess.kill('SIGTERM');
+            
+            const timeout = setTimeout(() => {
+              if (mlxServerProcess && !mlxServerProcess.killed) {
+                mlxServerProcess.kill('SIGKILL');
+              }
+              resolve();
+            }, 5000);
+            
+            mlxServerProcess.once('exit', () => {
+              clearTimeout(timeout);
+              resolve();
+            });
+          } else {
+            resolve();
+          }
+        });
+      }
+    };
     
     mlxModelConfig = modelConfig;
-    console.log(`[Client Server] ✅ Server state updated: type=mlx, model=${modelConfig.id}`);
-    console.log(`[Client Server]    Model path: ${modelConfig.modelPath}`);
+    console.log(`[Client Server] ✅ Server state updated: type=mlx-python, model=${modelConfig.id}`);
+    console.log(`[Client Server]    Model path: ${modelPath}`);
     console.log(`[Client Server] ===== MLX SERVER START COMPLETE =====`);
   } catch (error) {
     console.error(`[Client Server] ❌ Failed to start MLX server:`, error.message);

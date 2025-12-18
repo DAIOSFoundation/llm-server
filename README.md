@@ -1,11 +1,11 @@
 # LLM Server (llama.cpp + MLX + React)
 
-This project serves LLMs via **`llama.cpp`'s `llama-server`** (GGUF format) and **MLX C++ API** (MLX format), providing a React UI for configuration, chat, and monitoring.
+This project serves LLMs via **`llama.cpp`'s `llama-server`** (GGUF format) and **MLX Python API** (MLX format), providing a React UI for configuration, chat, and monitoring.
 
 - **Client (UI)**: `frontend/` (React + Vite)
 - **Server (Inference/Router)**: 
   - `llama.cpp/build/bin/llama-server` (GGUF models, Router Mode recommended)
-  - `mlx/server.js` (MLX models, C++ native module)
+  - `mlx/server-python.js` (MLX models, Python mlx_lm library)
 - **Desktop (optional)**: Electron wrapper (`npm run desktop`)
 
 ---
@@ -17,7 +17,7 @@ This project serves LLMs via **`llama.cpp`'s `llama-server`** (GGUF format) and 
 This project consists of **4 independent servers** and a **frontend client**:
 
 1. **GGUF Server** (Port 8080): Uses `llama.cpp`'s `llama-server` to serve GGUF format models
-2. **MLX Server** (Port 8081): Uses MLX C++ API to serve MLX format models
+2. **MLX Server** (Port 8081): Uses MLX Python API (mlx_lm) to serve MLX format models
 3. **Authentication Server** (Port 8082): Handles login/logout/setup independently (runs independently from model servers)
 4. **Client Server Manager** (Port 8083): Automatically manages model servers in client-only mode
 5. **Frontend** (Port 5173): React + Vite based web UI
@@ -37,13 +37,11 @@ llm-server/
 ├─ llama.cpp/                     # llama.cpp (Git submodule)
 │  └─ build/bin/llama-server      # GGUF server executable
 │
-├─ mlx/                           # MLX server (C++ native module)
-│  ├─ src/
-│  │  └─ mlx_server.cpp          # MLX C++ API implementation (tokenization, inference)
-│  ├─ server.js                   # MLX HTTP server (port 8081)
-│  ├─ native.js                   # Node.js wrapper
-│  ├─ binding.gyp                 # node-gyp build configuration
-│  └─ models/                     # MLX model directory
+├─ mlx/                           # MLX server (Python 기반)
+│  ├─ server-python.js            # MLX HTTP server (port 8081)
+│  ├─ engine.py                   # Python mlx_lm 엔진
+│  ├─ requirements.txt            # Python 의존성
+│  └─ models/                      # MLX model directory
 │
 ├─ native/                        # Metal VRAM monitoring native module
 │  ├─ src/
@@ -71,11 +69,11 @@ llm-server/
 - **Startup**: Auto-started by `start-client-server.js` or manually executed
 
 #### 2. MLX Server (Port 8081)
-- **Server File**: `mlx/server.js`
-- **Native Module**: `mlx/src/mlx_server.cpp` (uses MLX C++ API)
-- **Native Library**: MLX C++ library (`/opt/homebrew/lib/libmlx*.dylib`)
-- **Functionality**: MLX format model loading and inference, BPE tokenization
+- **Server File**: `mlx/server-python.js` (Python 기반)
+- **Python Engine**: `mlx/engine.py` (uses mlx_lm library)
+- **Functionality**: MLX format model loading and inference
 - **Startup**: Auto-started by `start-client-server.js` or manually executed
+- **Note**: Python 기반 서버는 mlx_lm 라이브러리를 사용하여 안정적으로 모델을 로드하고 추론을 수행합니다.
 
 #### 3. Authentication Server (Port 8082)
 - **Server File**: `auth-server.js`
@@ -98,7 +96,7 @@ llm-server/
   
   3. **Server Process Management**
      - GGUF Server: Spawns and manages `llama.cpp/build/bin/llama-server` process
-     - MLX Server: Spawns and manages `mlx/server.js` Node.js process
+     - MLX Server: Spawns and manages `mlx/server-python.js` Node.js process
      - Handles server process termination and restart
   
   4. **Client Mode Support**
@@ -125,10 +123,10 @@ llm-server/
 - **Purpose**: GGUF model loading and inference
 - **Build**: Uses CMake to generate `llama-server` executable
 
-#### MLX C++ Library
-- **Installation Location**: `/opt/homebrew/include/mlx`, `/opt/homebrew/lib/libmlx*.dylib`
+#### MLX Python Library
+- **Installation**: `pip install mlx-lm mlx`
 - **Purpose**: MLX model loading and inference (Apple Silicon optimized)
-- **Integration**: Directly used in `mlx/src/mlx_server.cpp`
+- **Integration**: Used via Python subprocess in `mlx/engine.py`
 
 #### Native VRAM Monitor
 - **Location**: `native/src/vram_monitor.cpp`
@@ -141,7 +139,7 @@ llm-server/
 
 - **Dual Model Format Support (GGUF/MLX)**
   - **GGUF Format**: Uses `llama.cpp`'s `llama-server` for GGUF models (Port 8080)
-  - **MLX Format**: Uses MLX C++ API for MLX models (Port 8081, Apple Silicon optimized)
+  - **MLX Format**: Uses MLX Python API (mlx_lm) for MLX models (Port 8081, Apple Silicon optimized)
   - **Dual Server Architecture**: Both servers run simultaneously; frontend automatically selects the correct port based on model format
   - No server restart required when switching models - frontend simply changes the endpoint
 - **Login (Super Admin)**
@@ -155,12 +153,12 @@ llm-server/
 - **GGUF Metadata (Quantization) Display**
   - Reads GGUF via `POST /gguf-info` and shows a summary of **quantization / tensor types / QKV types**
   - When loading settings, if a model ID exists, metadata is **fetched automatically** and the summary is shown
-- **MLX C++ Native Implementation**
-  - Direct MLX C++ API integration (no Python subprocess)
-  - Full Transformer forward pass implementation (Multi-Head Attention, Feed Forward, Layer Normalization)
-  - BPE tokenization/detokenization (llama.cpp style)
-  - Advanced sampling strategies (Temperature, Top-K, Top-P, Min-P)
-  - Streaming token generation with async callbacks
+- **MLX Python Implementation**
+  - Python mlx_lm library integration via subprocess
+  - Automatic model loading, sharding, and weight merging
+  - Built-in tokenization support
+  - Sampling strategies (Temperature, Top-P, Repetition Penalty)
+  - Streaming token generation with SSE
 - **Real-time Performance Metrics (Push-based)**
   - Updates VRAM / memory / CPU / token speed via `GET /metrics/stream` (SSE) **without polling**
 - **GPU “Utilization (Compute Busy %)”**
@@ -186,8 +184,8 @@ The application uses a **multi-server architecture** with separate ports for dif
   - Uses `llama.cpp`'s `llama-server` for GGUF models
   - Started via `start-client-server.js` with `--port 8080` flag
 - **MLX Server**: Port **8081** (default)
-  - Uses MLX C++ API server for MLX models
-  - Configured in `mlx/server.js` (`this.port = 8081`)
+  - Uses MLX Python API (mlx_lm) server for MLX models
+  - Configured in `mlx/server-python.js` (default: 8081)
 - **Authentication Server**: Port **8082** (default)
   - Handles login/logout/setup independently
   - Runs even when model servers are down
@@ -198,7 +196,7 @@ The application uses a **multi-server architecture** with separate ports for dif
 ### Port Configuration
 
 - **GGUF Server Port**: Can be changed via `LLAMA_PORT` environment variable (default: 8080)
-- **MLX Server Port**: Hardcoded in `mlx/server.js` (default: 8081)
+- **MLX Server Port**: Hardcoded in `mlx/server-python.js` (default: 8081)
 - **Authentication Server Port**: Hardcoded in `auth-server.js` (default: 8082)
 - **Client Server Manager Port**: Hardcoded in `start-client-server.js` (default: 8083)
 
@@ -298,24 +296,32 @@ cmake --build . --config Release -j 8
 cd ../..
 ```
 
-### 3) Build MLX C++ Library (for MLX models)
+### 3) MLX 서버 설정 (MLX 모델 사용 시)
 
-The MLX C++ library must be installed:
+MLX 서버는 Python 기반으로 동작합니다.
 
 ```bash
-# Build and install MLX C++ library from source
-git clone https://github.com/ml-explore/mlx.git /tmp/mlx-build
-cd /tmp/mlx-build
-mkdir build && cd build
-cmake ..
-make -j8
-# Manually install headers and libraries
-sudo mkdir -p /opt/homebrew/include/mlx
-sudo mkdir -p /opt/homebrew/lib
-sudo cp -r ../mlx/*.h /opt/homebrew/include/mlx/
-sudo cp -r ../mlx/io/*.h /opt/homebrew/include/mlx/io/
-sudo cp -r ../mlx/backend/*.h /opt/homebrew/include/mlx/backend/
-sudo cp build/libmlx*.dylib /opt/homebrew/lib/
+# Python 의존성 설치
+cd mlx
+pip3 install -r requirements.txt
+# 또는 직접 설치
+pip3 install mlx-lm mlx
+
+# 서버 실행
+node server-python.js
+```
+
+**장점:**
+- ✅ mlx_lm이 샤딩, 구조, 가중치 병합을 자동으로 처리
+- ✅ 모델 구조 변경 시 `pip install -U mlx-lm`만으로 업데이트 가능
+- ✅ 안정성과 유지보수성 향상
+- ✅ DeepSeek-MoE 같은 복잡한 모델도 완벽하게 지원
+
+**환경 변수:**
+```bash
+# 모델 경로 지정 (선택사항)
+export MLX_MODEL_PATH="./models/deepseek-moe-16b-chat-mlx-q4_0"
+node server-python.js
 ```
 
 ### 4) Build Native Modules
@@ -326,7 +332,6 @@ npm run build:native
 
 This command builds:
 - `native/`: Metal VRAM monitor (macOS)
-- `mlx/`: MLX C++ native module
 
 ---
 
@@ -443,18 +448,18 @@ npm run build
 
 ## MLX Implementation Details
 
-### MLX C++ API Integration
+### MLX Python API Integration
 
-The MLX server directly uses Apple's official MLX C++ library:
+The MLX server uses Python's mlx_lm library:
 
-- **Model Loading**: Uses `mlx::core::load_safetensors()` or `mlx::core::load_gguf()`
-- **Transformer Implementation**: Implemented using MLX C++ API, referencing llama.cpp's ggml-metal implementation
+- **Model Loading**: Uses `mlx_lm.load()` which automatically handles model loading, sharding, and weight merging
+- **Transformer Implementation**: Handled by mlx_lm library
   - Multi-Head Attention
   - Feed Forward Network
   - Layer Normalization
-- **Tokenization**: Implemented referencing llama.cpp's BPE tokenization algorithm
-- **Sampling**: Supports Temperature, Top-K, Top-P, Min-P
-- **Streaming**: Async token generation and SSE streaming
+- **Tokenization**: Uses mlx_lm's built-in tokenizer
+- **Sampling**: Supports Temperature, Top-P, Repetition Penalty
+- **Streaming**: Async token generation and SSE streaming via `stream_generate()`
 
 ### MLX Model Requirements
 
@@ -470,9 +475,10 @@ MLX model directory must contain:
 |---------|------------------|-----|
 | Platform | Cross-platform | macOS (Apple Silicon) |
 | GPU Acceleration | CUDA/Metal/OpenCL | Metal (optimized) |
-| Model Format | GGUF | Safetensors/GGUF |
-| Tokenization | Built-in | BPE (llama.cpp style) |
+| Model Format | GGUF | Safetensors (via mlx_lm) |
+| Tokenization | Built-in | mlx_lm built-in tokenizer |
 | Performance | High | Very High (Apple Silicon) |
+| Implementation | C++ | Python (mlx_lm) |
 
 ## Operations Tips
 
@@ -521,6 +527,73 @@ When you change the model in the dropdown:
   - `LLAMA_PORT`: server port (default 8080)
 
 ---
+
+## Testing
+
+### MLX Server Testing
+
+MLX 서버의 추론 기능을 테스트하기 위한 자동화된 테스트 스크립트가 제공됩니다.
+
+#### 서버 실행 방법
+
+MLX 서버를 수동으로 실행하려면:
+
+```bash
+cd mlx
+node server.js
+```
+
+서버는 기본적으로 **포트 8081**에서 실행됩니다.
+
+#### 추론 테스트 실행 방법
+
+추론 테스트를 실행하려면:
+
+```bash
+cd mlx
+node test-inference.js
+```
+
+**테스트 스크립트 동작 방식:**
+
+1. **자동 서버 시작**: 테스트 스크립트는 MLX 서버가 실행 중이 아니면 자동으로 시작합니다.
+2. **헬스 체크**: 서버가 준비될 때까지 최대 3회 재시도하며, 각 재시도 간 1초 대기합니다.
+3. **메트릭 수집**: 서버의 성능 메트릭을 수집합니다.
+4. **추론 요청**: 테스트 프롬프트(`안녕, 대한민국의 수도는 어디지?`)로 추론을 요청합니다.
+5. **결과 확인**: 추론 결과를 확인하고 성공/실패를 기록합니다.
+
+**테스트 설정:**
+
+- **서버 포트**: 8081 (기본값)
+- **테스트 프롬프트**: `안녕, 대한민국의 수도는 어디지?`
+- **헬스 체크 재시도**: 최대 3회
+- **서버 시작 타임아웃**: 30초
+- **추론 타임아웃**: 60초
+
+**테스트 결과:**
+
+테스트가 완료되면 다음 정보가 출력됩니다:
+- 성공한 테스트 수
+- 실패한 테스트 수
+- 각 테스트의 상세 로그
+
+**주의사항:**
+
+- 테스트를 실행하기 전에 MLX 모델이 `mlx/models/` 디렉토리에 올바르게 설정되어 있어야 합니다.
+- 서버가 이미 실행 중인 경우, 테스트 스크립트는 기존 서버를 사용합니다.
+- 테스트 중 서버가 크래시되면 자동으로 재시작을 시도합니다.
+
+### GGUF Server Testing
+
+GGUF 서버의 테스트는 `llama.cpp`의 기본 테스트 도구를 사용할 수 있습니다:
+
+```bash
+cd llama.cpp
+# llama-server가 실행 중인 상태에서
+curl -X POST http://localhost:8080/completion \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Hello, world", "n_predict": 10}'
+```
 
 ## Security Notes
 

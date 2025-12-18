@@ -603,33 +603,66 @@ function startGgufServer(modelConfig) {
 }
 
 async function startMlxServer(modelConfig) {
-  const MlxServer = require(path.join(__dirname, 'mlx', 'server'));
+  const { spawn } = require('child_process');
+  const serverScriptPath = path.join(__dirname, 'mlx', 'server-python.js');
   
   try {
     currentModelConfig = modelConfig; // 현재 모델 설정 저장
     
-    const mlxServer = new MlxServer(modelConfig);
-    await mlxServer.start();
+    // 모델 경로 설정
+    let modelPath = modelConfig.modelPath;
+    if (!path.isAbsolute(modelPath)) {
+      modelPath = path.join(__dirname, 'mlx', 'models', modelPath);
+    }
     
-    // MLX 서버 인스턴스 저장
-    mlxServerInstance = mlxServer;
+    // Python 기반 서버 시작
+    const mlxServerProcess = spawn('node', [serverScriptPath], {
+      cwd: path.join(__dirname, 'mlx'),
+      stdio: 'pipe',
+      env: {
+        ...process.env,
+        MLX_MODEL_PATH: modelPath,
+        PORT: '8081'
+      }
+    });
+    
+    mlxServerProcess.stdout.on('data', (data) => {
+      const output = data.toString();
+      console.log(`[MLX Server] ${output}`);
+      sendLog('log-message', `[MLX Server] ${output}`);
+    });
+    
+    mlxServerProcess.stderr.on('data', (data) => {
+      const output = data.toString();
+      console.error(`[MLX Server Error] ${output}`);
+      sendLog('log-message', `[MLX Server Error] ${output}`);
+    });
+    
+    mlxServerProcess.on('close', (code) => {
+      console.log(`[MLX Server] Process exited with code ${code}`);
+      sendLog('log-message', `[MLX Server] Process exited with code ${code}`);
+      mlxServerInstance = null;
+      currentServerType = null;
+      currentModelConfig = null;
+    });
     
     // 서버 프로세스로 저장 (나중에 종료할 수 있도록)
     llamaServerProcess = {
       kill: () => {
-        if (mlxServerInstance) {
-          mlxServerInstance.stop();
-          mlxServerInstance = null;
+        if (mlxServerProcess) {
+          mlxServerProcess.kill('SIGTERM');
         }
         llamaServerProcess = null;
+        mlxServerInstance = null;
         currentModelConfig = null;
         currentServerType = null;
         cachedVramUsed = 0;
       }
     };
     
+    mlxServerInstance = { process: mlxServerProcess };
     currentServerType = 'mlx';
-    const msg = `[INFO] MLX server started for model: ${modelConfig.modelPath}`;
+    const msg = `[INFO] MLX Python server started for model: ${modelConfig.modelPath}`;
     console.log(msg);
     sendLog('log-message', msg);
   } catch (error) {

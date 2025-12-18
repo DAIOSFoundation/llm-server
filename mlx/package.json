@@ -1,20 +1,13 @@
 {
-  "name": "mlx-server-native",
+  "name": "mlx-server-python",
   "version": "1.0.0",
-  "description": "Native module for MLX server",
-  "main": "native.js",
-  "scripts": {
-    "install": "node-gyp rebuild",
-    "build": "node-gyp rebuild"
-  },
+  "description": "Python-based MLX server",
+  "main": "server-python.js",
+  "scripts": {},
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "node-addon-api": "^7.0.0"
-  },
-  "devDependencies": {
-    "node-gyp": "^10.0.0"
+    "express": "^5.2.1"
   }
 }
-
