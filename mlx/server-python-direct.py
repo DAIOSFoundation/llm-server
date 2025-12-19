@@ -338,12 +338,13 @@ async def metrics_stream(websocket: WebSocket):
         }
         try:
             await websocket.send_json(metrics)
+            # print(f"[DEBUG] Initial metrics sent: {metrics}", flush=True)
         except Exception as e:
             print(f"[ERROR] Failed to send initial metrics: {e}", flush=True)
         
-        # 주기적으로 메트릭 전송 (0.5초마다 - 더 빠른 업데이트)
+        # 주기적으로 메트릭 전송 (1초마다 - 안정적인 업데이트)
         while True:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)
             system_metrics = get_system_metrics()
             metrics = {
                 "type": "metrics",

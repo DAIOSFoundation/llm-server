@@ -275,84 +275,69 @@ const PerformancePanel = () => {
 
       const handleMetricsData = (data) => {
         try {
-          // console.log('[PerformancePanel] handleMetricsData called with:', data);
+          // MLX 서버 메트릭 디버깅
+          // console.log('[PerformancePanel] MLX metrics received:', data);
           
           const vramTotalBytes = Number(data.vramTotal || 0);
           const vramUsedBytes = Number(data.vramUsed || 0);
-          // console.log('[PerformancePanel] VRAM:', { vramTotalBytes, vramUsedBytes });
           if (vramTotalBytes > 0) {
             setVramTotal(Math.round(vramTotalBytes));
-            // console.log('[PerformancePanel] Set vramTotal:', Math.round(vramTotalBytes));
           }
           if (vramUsedBytes >= 0) {
             setVramUsed(Math.round(vramUsedBytes));
-            // console.log('[PerformancePanel] Set vramUsed:', Math.round(vramUsedBytes));
           }
 
           const sysMemTotal = Number(data.sysMemTotal || 0);
           const sysMemUsed = Number(data.sysMemUsed || 0);
-          // console.log('[PerformancePanel] System Memory:', { sysMemTotal, sysMemUsed });
           if (sysMemTotal > 0 && sysMemUsed >= 0) {
             const memUsage = Math.max(0, Math.min(100, (sysMemUsed / sysMemTotal) * 100));
             setMemoryUsage(memUsage);
-            // console.log('[PerformancePanel] Set memoryUsage:', memUsage);
           }
 
           const now = Date.now();
           const cpuSec = Number(data.procCpuSec || 0);
           const cores = Math.max(1, Math.round(Number(data.cpuCores || 1)));
-          // console.log('[PerformancePanel] CPU:', { cpuSec, cores, lastProcCpuSecondsRef: lastProcCpuSecondsRef.current });
           if (lastProcCpuSecondsRef.current != null && lastProcCpuSampleAtRef.current != null) {
             const dt = (now - lastProcCpuSampleAtRef.current) / 1000;
             const dcpu = cpuSec - lastProcCpuSecondsRef.current;
             if (dt > 0 && dcpu >= 0) {
               const pct = (dcpu / dt / cores) * 100;
               setCpuUsage(Math.max(0, Math.min(100, pct)));
-              // console.log('[PerformancePanel] Set cpuUsage:', pct);
             }
           } else {
-            // 첫 번째 메트릭이므로 초기값 설정만
-            // console.log('[PerformancePanel] First metrics, setting initial values');
+            // 첫 번째 메트릭: 초기값 설정 (CPU 사용률은 다음 메트릭부터 계산)
+            // CPU 사용률을 0으로 설정하거나, 프로세스 CPU 시간만 저장
+            setCpuUsage(0);
           }
           lastProcCpuSecondsRef.current = cpuSec;
           lastProcCpuSampleAtRef.current = now;
 
           const tps = Number(data.tps || 0);
           // 클라이언트 측 계산 값이 있으면 우선 사용 (더 정확한 실시간 속도)
-          // 클라이언트 측 계산이 더 최근 데이터를 반영하므로 항상 우선순위가 높음
           if (tokenSpeedRef.current > 0) {
             setTokenSpeed(tokenSpeedRef.current);
           } else if (tps > 0) {
             // 클라이언트 측 계산이 없으면 서버 메트릭 사용
             setTokenSpeed(Math.max(0, tps));
             tokenSpeedRef.current = tps;
-            // console.log('[PerformancePanel] Using server tps:', tps);
-          }
-          // 디버깅용
-          if (tps > 0 || tokenSpeedRef.current > 0) {
-            // console.log('[PerformancePanel] Token speed - server:', tps, 'client:', tokenSpeedRef.current, 'final:', tokenSpeedRef.current > 0 ? tokenSpeedRef.current : tps);
           }
           
-          // GPU 게이지는 실제 GPU 점유율을 얻기 어려워(플랫폼별/백엔드별),
-          // router 모드에서는 VRAM 점유율(%)을 GPU 지표로 사용한다.
+          // GPU 게이지는 VRAM 점유율(%)을 GPU 지표로 사용
           if (vramTotalBytes > 0) {
             const gpuUsage = Math.max(0, Math.min(100, (vramUsedBytes / vramTotalBytes) * 100));
             setGpuUsage(gpuUsage);
-            // console.log('[PerformancePanel] Set gpuUsage:', gpuUsage);
           } else {
             setGpuUsage(0);
-            // console.log('[PerformancePanel] Set gpuUsage: 0 (no VRAM total)');
           }
 
           const predictedTotal = Number(data.predictedTotal || 0);
           if (lastPredictedTotalRef.current != null) {
             const delta = Math.max(0, Math.round(predictedTotal - lastPredictedTotalRef.current));
             setTokenCount(delta);
-            // console.log('[PerformancePanel] Set tokenCount:', delta);
           }
           lastPredictedTotalRef.current = predictedTotal;
         } catch (e) {
-          // console.error('[PerformancePanel] Error in handleMetricsData:', e, data);
+          console.error('[PerformancePanel] Error in handleMetricsData:', e, data);
         }
       };
 
@@ -372,7 +357,7 @@ const PerformancePanel = () => {
                 websocketRef.current = ws;
 
                 ws.onopen = () => {
-                  // WebSocket 연결 성공
+                  console.log('[PerformancePanel] MLX metrics WebSocket connected');
                 };
 
                 ws.onmessage = (event) => {
@@ -380,9 +365,11 @@ const PerformancePanel = () => {
                     const data = JSON.parse(event.data);
                     if (data.type === 'metrics') {
                       handleMetricsData(data);
+                    } else {
+                      console.warn('[PerformancePanel] Unexpected message type:', data.type);
                     }
                   } catch (e) {
-                    // ignore parse errors
+                    console.error('[PerformancePanel] Failed to parse metrics data:', e, event.data);
                   }
                 };
 
