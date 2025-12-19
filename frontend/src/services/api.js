@@ -200,7 +200,10 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
               }
               if (token) {
                 onToken(token);
+                // token-received 이벤트 발생 (PerformancePanel에서 토큰 속도 계산용)
                 window.dispatchEvent(new CustomEvent('token-received'));
+                // 디버깅용
+                // console.log('[API] token-received event dispatched for token:', token.substring(0, 20));
               }
             } else if (data.type === 'done') {
               ws.close();
@@ -471,7 +474,7 @@ export const tokenizeText = async (content) => {
     const model = (config.modelPath || '').trim();
     const serverUrl = getActiveServerUrl();
     
-    console.log('[API] tokenizeText: Calling', `${serverUrl}/tokenize`, 'with content length:', content.length);
+    // console.log('[API] tokenizeText: Calling', `${serverUrl}/tokenize`, 'with content length:', content.length);
     
     const response = await fetch(`${serverUrl}/tokenize`, {
       method: 'POST',
@@ -494,7 +497,7 @@ export const tokenizeText = async (content) => {
     }
 
     const data = await response.json();
-    console.log('[API] tokenizeText: Response received:', data.tokens?.length || 0, 'tokens', 'data:', data);
+    // console.log('[API] tokenizeText: Response received:', data.tokens?.length || 0, 'tokens', 'data:', data);
     if (data.tokens && Array.isArray(data.tokens)) {
       return data.tokens;
     }

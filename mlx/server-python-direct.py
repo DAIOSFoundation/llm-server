@@ -277,13 +277,16 @@ def get_system_metrics():
         current_time = time.time()
         
         # 최근 2초 이내의 토큰만 카운트
-        recent_token_times = [t for t in recent_token_times if current_time - t <= 2.0]
+        # 전역 변수를 필터링하여 최신 상태 유지
+        filtered_times = [t for t in recent_token_times if current_time - t <= 2.0]
+        # 전역 변수 업데이트 (다음 계산을 위해)
+        recent_token_times[:] = filtered_times
         
-        if len(recent_token_times) > 0:
+        if len(filtered_times) > 0:
             # 최근 토큰들의 시간 범위
-            time_span = current_time - min(recent_token_times)
+            time_span = current_time - min(filtered_times)
             if time_span > 0:
-                tps = len(recent_token_times) / time_span
+                tps = len(filtered_times) / time_span
         elif tokens_generated > 0 and generation_start_time:
             # 폴백: 전체 생성 시간 동안의 평균 속도
             elapsed = current_time - generation_start_time
@@ -473,9 +476,9 @@ async def chat(request: Request):
                 tokens_generated = 0
                 eos_token_id = getattr(tokenizer, 'eos_token_id', None)
                 
-                # 토큰 누적을 위한 리스트 (생성된 토큰만 포함)
-                accumulated_tokens = []
-                previous_full_text = ""  # 이전 전체 텍스트 추적
+                # UTF-8 버퍼: 멀티바이트 문자 처리를 위한 토큰 누적 (최대 3개)
+                token_buffer = []
+                previous_text = ""
                 
                 step_generator = generate_step(
                     prompt_array,
@@ -508,46 +511,53 @@ async def chat(request: Request):
                     
                     # EOS 토큰 체크
                     if eos_token_id is not None and token_id == eos_token_id:
+                        # 버퍼에 남은 토큰 처리
+                        if token_buffer:
+                            try:
+                                buffered_text = tokenizer.decode(token_buffer, skip_special_tokens=True)
+                                buffered_text = re.sub(r'<\|[^>]*\|>', '', buffered_text)
+                                if buffered_text.startswith(previous_text):
+                                    final_text = buffered_text[len(previous_text):]
+                                    if final_text:
+                                        data = json.dumps({"content": final_text}, ensure_ascii=False)
+                                        yield f"data: {data}\n\n"
+                            except:
+                                pass
                         break
                     
-                    # 토큰을 누적 리스트에 추가
-                    accumulated_tokens.append(token_id)
+                    # 토큰을 버퍼에 추가
+                    token_buffer.append(token_id)
                     
-                    # 누적된 토큰들을 디코딩하여 새로운 부분만 추출
-                    try:
-                        # 전체 누적 토큰 디코딩 (멀티바이트 문자 올바른 처리)
-                        current_full_text = tokenizer.decode(accumulated_tokens, skip_special_tokens=True)
-                        
-                        # 스페셜 토큰 패턴 제거
-                        current_full_text = re.sub(r'<\|[^>]*\|>', '', current_full_text)
-                        
-                        # 이전 텍스트와 비교하여 새로운 부분만 추출
-                        if previous_full_text:
-                            if current_full_text.startswith(previous_full_text):
-                                # 이전 텍스트로 시작하면 새로운 부분만 추출
-                                token_text = current_full_text[len(previous_full_text):]
+                    # 버퍼가 최대 크기에 도달하거나, 완전한 문자로 디코딩 가능할 때 전송
+                    if len(token_buffer) >= 3:
+                        try:
+                            # 버퍼의 모든 토큰 디코딩
+                            current_text = tokenizer.decode(token_buffer, skip_special_tokens=True)
+                            current_text = re.sub(r'<\|[^>]*\|>', '', current_text)
+                            
+                            # 이전 텍스트와 비교하여 새로운 부분만 추출
+                            if current_text.startswith(previous_text):
+                                new_text = current_text[len(previous_text):]
+                                if new_text:
+                                    # 완전한 문자인지 확인 (replacement character가 없으면)
+                                    if '\ufffd' not in new_text:
+                                        data = json.dumps({"content": new_text}, ensure_ascii=False)
+                                        yield f"data: {data}\n\n"
+                                        previous_text = current_text
+                                        token_buffer = []
+                                    else:
+                                        # replacement character가 있으면 버퍼 유지 (다음 토큰 대기)
+                                        pass
                             else:
-                                # 시작 부분이 다르면 (디코딩 문제 등) 전체를 사용
-                                token_text = current_full_text
-                            previous_full_text = current_full_text
-                        else:
-                            # 첫 토큰인 경우
-                            token_text = current_full_text
-                            previous_full_text = current_full_text
-                        
-                        # UTF-8 인코딩 보장
-                        if isinstance(token_text, bytes):
-                            token_text = token_text.decode('utf-8', errors='replace')
-                    except Exception as e:
-                        # 디코딩 실패 시 빈 문자열 사용
-                        token_text = ""
-                        if not previous_full_text:
-                            previous_full_text = ""
-                    
-                    # SSE 형식으로 전송 (ensure_ascii=False로 한글 등 유니코드 문자 보존)
-                    if token_text:  # 빈 문자열이 아닐 때만 전송
-                        data = json.dumps({"content": token_text}, ensure_ascii=False)
-                        yield f"data: {data}\n\n"
+                                # 시작 부분이 다르면 전체 사용
+                                if '\ufffd' not in current_text:
+                                    data = json.dumps({"content": current_text}, ensure_ascii=False)
+                                    yield f"data: {data}\n\n"
+                                    previous_text = current_text
+                                    token_buffer = []
+                        except Exception as e:
+                            # 디코딩 실패 시 버퍼 비우기
+                            token_buffer = []
                     
                     token_count += 1
                     tokens_generated += 1
@@ -615,6 +625,7 @@ async def chat_websocket(websocket: WebSocket):
         await websocket.close()
         return
     
+    global tokens_generated, tokens_generated_total, generation_start_time, last_token_time, recent_token_times
     try:
         # 요청 수신
         data = await websocket.receive_json()
@@ -665,9 +676,9 @@ async def chat_websocket(websocket: WebSocket):
             token_count = 0
             eos_token_id = getattr(tokenizer, 'eos_token_id', None)
             
-            # 토큰 누적을 위한 리스트 (생성된 토큰만 포함)
-            accumulated_tokens = []
-            previous_full_text = ""  # 이전 전체 텍스트 추적
+            # UTF-8 버퍼: 멀티바이트 문자 처리를 위한 토큰 누적 (최대 3개)
+            token_buffer = []
+            previous_text = ""
             
             step_generator = generate_step(
                 prompt_array,
@@ -700,45 +711,50 @@ async def chat_websocket(websocket: WebSocket):
                 
                 # EOS 토큰 체크
                 if eos_token_id is not None and token_id == eos_token_id:
+                    # 버퍼에 남은 토큰 처리
+                    if token_buffer:
+                        try:
+                            buffered_text = tokenizer.decode(token_buffer, skip_special_tokens=True)
+                            buffered_text = re.sub(r'<\|[^>]*\|>', '', buffered_text)
+                            if buffered_text.startswith(previous_text):
+                                final_text = buffered_text[len(previous_text):]
+                                if final_text:
+                                    await websocket.send_json({"type": "token", "content": final_text})
+                        except:
+                            pass
                     break
                 
-                # 토큰을 누적 리스트에 추가
-                accumulated_tokens.append(token_id)
+                # 토큰을 버퍼에 추가
+                token_buffer.append(token_id)
                 
-                # 누적된 토큰들을 디코딩하여 새로운 부분만 추출
-                try:
-                    # 전체 누적 토큰 디코딩 (멀티바이트 문자 올바른 처리)
-                    current_full_text = tokenizer.decode(accumulated_tokens, skip_special_tokens=True)
-                    
-                    # 스페셜 토큰 패턴 제거
-                    current_full_text = re.sub(r'<\|[^>]*\|>', '', current_full_text)
-                    
-                    # 이전 텍스트와 비교하여 새로운 부분만 추출
-                    if previous_full_text:
-                        if current_full_text.startswith(previous_full_text):
-                            # 이전 텍스트로 시작하면 새로운 부분만 추출
-                            token_text = current_full_text[len(previous_full_text):]
+                # 버퍼가 최대 크기에 도달하거나, 완전한 문자로 디코딩 가능할 때 전송
+                if len(token_buffer) >= 3:
+                    try:
+                        # 버퍼의 모든 토큰 디코딩
+                        current_text = tokenizer.decode(token_buffer, skip_special_tokens=True)
+                        current_text = re.sub(r'<\|[^>]*\|>', '', current_text)
+                        
+                        # 이전 텍스트와 비교하여 새로운 부분만 추출
+                        if current_text.startswith(previous_text):
+                            new_text = current_text[len(previous_text):]
+                            if new_text:
+                                # 완전한 문자인지 확인 (replacement character가 없으면)
+                                if '\ufffd' not in new_text:
+                                    await websocket.send_json({"type": "token", "content": new_text})
+                                    previous_text = current_text
+                                    token_buffer = []
+                                else:
+                                    # replacement character가 있으면 버퍼 유지 (다음 토큰 대기)
+                                    pass
                         else:
-                            # 시작 부분이 다르면 (디코딩 문제 등) 전체를 사용
-                            token_text = current_full_text
-                        previous_full_text = current_full_text
-                    else:
-                        # 첫 토큰인 경우
-                        token_text = current_full_text
-                        previous_full_text = current_full_text
-                    
-                    # UTF-8 인코딩 보장
-                    if isinstance(token_text, bytes):
-                        token_text = token_text.decode('utf-8', errors='replace')
-                except Exception as e:
-                    # 디코딩 실패 시 빈 문자열 사용
-                    token_text = ""
-                    if not previous_full_text:
-                        previous_full_text = ""
-                
-                # WebSocket으로 실시간 전송 (새로운 부분만 전송)
-                if token_text:  # 빈 문자열이 아닐 때만 전송
-                    await websocket.send_json({"type": "token", "content": token_text})
+                            # 시작 부분이 다르면 전체 사용
+                            if '\ufffd' not in current_text:
+                                await websocket.send_json({"type": "token", "content": current_text})
+                                previous_text = current_text
+                                token_buffer = []
+                    except Exception as e:
+                        # 디코딩 실패 시 버퍼 비우기
+                        token_buffer = []
                 
                 token_count += 1
                 tokens_generated += 1
@@ -773,7 +789,6 @@ async def chat_websocket(websocket: WebSocket):
             broadcast_log(traceback.format_exc())
             await websocket.send_json({"type": "error", "message": error_msg})
         finally:
-            global tokens_generated, generation_start_time
             processing = False
             tokens_generated = 0
             generation_start_time = None
@@ -861,10 +876,6 @@ async def completion(request: Request):
                     except:
                         pass
                 
-                # 토큰 누적을 위한 리스트 (생성된 토큰만 포함)
-                accumulated_tokens = []
-                previous_full_text = ""  # 이전 전체 텍스트 추적
-                
                 step_generator = generate_step(
                     prompt_array,
                     model,
@@ -904,39 +915,25 @@ async def completion(request: Request):
                         yield f"data: {json.dumps({'stop': True, 'stop_reason': 'eos'})}\n\n"
                         break
                     
-                    # 토큰을 누적 리스트에 추가
-                    accumulated_tokens.append(token_id)
-                    
-                    # 누적된 토큰들을 디코딩하여 새로운 부분만 추출
+                    # 개별 토큰 디코딩 (누적 방식 제거)
                     try:
-                        # 전체 누적 토큰 디코딩 (멀티바이트 문자 올바른 처리)
-                        current_full_text = tokenizer.decode(accumulated_tokens, skip_special_tokens=True)
+                        # 현재 토큰만 디코딩
+                        token_text = tokenizer.decode([token_id], skip_special_tokens=True)
                         
                         # 스페셜 토큰 패턴 제거
-                        current_full_text = re.sub(r'<\|[^>]*\|>', '', current_full_text)
-                        
-                        # 이전 텍스트와 비교하여 새로운 부분만 추출
-                        if previous_full_text:
-                            if current_full_text.startswith(previous_full_text):
-                                # 이전 텍스트로 시작하면 새로운 부분만 추출
-                                token_text = current_full_text[len(previous_full_text):]
-                            else:
-                                # 시작 부분이 다르면 (디코딩 문제 등) 전체를 사용
-                                token_text = current_full_text
-                            previous_full_text = current_full_text
-                        else:
-                            # 첫 토큰인 경우
-                            token_text = current_full_text
-                            previous_full_text = current_full_text
+                        token_text = re.sub(r'<\|[^>]*\|>', '', token_text)
                         
                         # UTF-8 인코딩 보장
                         if isinstance(token_text, bytes):
-                            token_text = token_text.decode('utf-8', errors='replace')
+                            token_text = token_text.decode('utf-8', errors='ignore')
+                        
+                        # 깨진 문자 제거 (replacement character 및 기타 제어 문자)
+                        token_text = token_text.replace('\ufffd', '')  # replacement character
+                        token_text = ''.join(char for char in token_text if char.isprintable() or char.isspace() or ord(char) >= 0x10000)
+                        
                     except Exception as e:
                         # 디코딩 실패 시 빈 문자열 사용
                         token_text = ""
-                        if not previous_full_text:
-                            previous_full_text = ""
                     
                     # llama.cpp 형식으로 SSE 전송 (ensure_ascii=False로 한글 등 유니코드 문자 보존)
                     if token_text:  # 빈 문자열이 아닐 때만 전송

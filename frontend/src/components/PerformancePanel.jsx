@@ -17,6 +17,7 @@ const PerformancePanel = () => {
   const tokenSpeedRef = useRef(0);
   const lastTokenTimeRef = useRef(0); // 첫 토큰이 올 때 초기화
   const tokenCountRef = useRef(0);
+  const lastUpdateTimeRef = useRef(0); // 마지막 업데이트 시간
   const contextSizeRef = useRef(2048);
   const lastProcCpuSecondsRef = useRef(null);
   const lastProcCpuSampleAtRef = useRef(null);
@@ -50,19 +51,29 @@ const PerformancePanel = () => {
       const now = Date.now();
       
       // 첫 토큰인 경우 시간 초기화
-      if (lastTokenTimeRef.current === 0 || tokenCountRef.current === 0) {
+      if (lastTokenTimeRef.current === 0) {
         lastTokenTimeRef.current = now;
+        tokenCountRef.current = 1; // 첫 토큰도 카운트에 포함
+        lastUpdateTimeRef.current = now;
+        // console.log('[PerformancePanel] First token received, initializing timer');
+        return; // 첫 토큰은 시간만 설정하고 계산하지 않음
       }
       
-      const timeDiff = now - lastTokenTimeRef.current;
       tokenCountRef.current += 1;
+      const timeDiff = now - lastTokenTimeRef.current;
+      const timeSinceLastUpdate = now - lastUpdateTimeRef.current;
       
-      // 0.5초 이상 경과했거나, 1초마다 속도 계산
-      if (timeDiff >= 500) {
+      // 30ms 이상 경과했거나, 토큰이 10개 이상 모이고 마지막 업데이트 이후 200ms가 지났을 때 속도 계산
+      if (timeDiff >= 30 || (tokenCountRef.current >= 10 && timeSinceLastUpdate >= 200)) {
         const tokensPerSecond = (tokenCountRef.current / timeDiff) * 1000;
-        tokenSpeedRef.current = tokensPerSecond;
-        setTokenSpeed(tokensPerSecond);
-        setTokenCount(tokenCountRef.current);
+        if (tokensPerSecond > 0) {
+          tokenSpeedRef.current = tokensPerSecond;
+          setTokenSpeed(tokensPerSecond);
+          setTokenCount(tokenCountRef.current);
+          lastUpdateTimeRef.current = now;
+          // 디버깅용
+          // console.log('[PerformancePanel] Token speed calculated:', tokensPerSecond.toFixed(2), 'tokens:', tokenCountRef.current, 'timeDiff:', timeDiff, 'ms');
+        }
         tokenCountRef.current = 0;
         lastTokenTimeRef.current = now;
       }
@@ -70,6 +81,7 @@ const PerformancePanel = () => {
 
     // 전역 이벤트 리스너 등록
     window.addEventListener('token-received', handleTokenReceived);
+    // console.log('[PerformancePanel] token-received event listener registered');
 
     // Context 사용량 업데이트 리스너
     const handleContextUpdate = (event) => {
@@ -185,6 +197,7 @@ const PerformancePanel = () => {
       // 리셋
       lastTokenTimeRef.current = 0;
       tokenCountRef.current = 0;
+      lastUpdateTimeRef.current = 0;
     };
   }, []);
 
@@ -305,17 +318,20 @@ const PerformancePanel = () => {
           lastProcCpuSampleAtRef.current = now;
 
           const tps = Number(data.tps || 0);
-          // 서버 메트릭의 tps 값이 0보다 크면 사용
-          if (tps > 0) {
-            setTokenSpeed(Math.max(0, tps));
-            tokenSpeedRef.current = tps;
-          }
-          // 서버 메트릭이 0이어도 클라이언트 측 계산 값이 있으면 사용 (더 정확한 실시간 속도)
-          // 클라이언트 측 계산이 더 최근 데이터를 반영하므로 우선순위를 높임
+          // 클라이언트 측 계산 값이 있으면 우선 사용 (더 정확한 실시간 속도)
+          // 클라이언트 측 계산이 더 최근 데이터를 반영하므로 항상 우선순위가 높음
           if (tokenSpeedRef.current > 0) {
             setTokenSpeed(tokenSpeedRef.current);
+          } else if (tps > 0) {
+            // 클라이언트 측 계산이 없으면 서버 메트릭 사용
+            setTokenSpeed(Math.max(0, tps));
+            tokenSpeedRef.current = tps;
+            // console.log('[PerformancePanel] Using server tps:', tps);
           }
-          // console.log('[PerformancePanel] Set tokenSpeed - server:', tps, 'client:', tokenSpeedRef.current);
+          // 디버깅용
+          if (tps > 0 || tokenSpeedRef.current > 0) {
+            // console.log('[PerformancePanel] Token speed - server:', tps, 'client:', tokenSpeedRef.current, 'final:', tokenSpeedRef.current > 0 ? tokenSpeedRef.current : tps);
+          }
           
           // GPU 게이지는 실제 GPU 점유율을 얻기 어려워(플랫폼별/백엔드별),
           // router 모드에서는 VRAM 점유율(%)을 GPU 지표로 사용한다.
@@ -342,42 +358,58 @@ const PerformancePanel = () => {
 
       if (useWebSocket) {
         // MLX 모델: WebSocket 사용
-        const wsUrl = serverUrl.replace('http://', 'ws://').replace('https://', 'wss://');
-        const wsUrlFull = `${wsUrl}/metrics/stream`;
-        // console.log('[PerformancePanel] Connecting to WebSocket:', wsUrlFull);
-        const ws = new WebSocket(wsUrlFull);
-        websocketRef.current = ws;
-
-        ws.onopen = () => {
-          // console.log('[PerformancePanel] WebSocket connected');
-        };
-
-        ws.onmessage = (event) => {
+        // 서버가 준비되었는지 먼저 확인
+        const checkAndConnect = async () => {
           try {
-            const data = JSON.parse(event.data);
-            // console.log('[PerformancePanel] Received metrics:', JSON.stringify(data, null, 2));
-            if (data.type === 'metrics') {
-              // console.log('[PerformancePanel] Calling handleMetricsData with:', data);
-              handleMetricsData(data);
+            const healthResponse = await fetch(`${serverUrl}/health`, { signal: AbortSignal.timeout(2000) });
+            if (healthResponse.ok) {
+              const healthData = await healthResponse.json();
+              // 서버가 ready 상태이거나 loading 상태일 때만 연결 시도
+              if (healthData.status === 'ready' || healthData.status === 'loading') {
+                const wsUrl = serverUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+                const wsUrlFull = `${wsUrl}/metrics/stream`;
+                const ws = new WebSocket(wsUrlFull);
+                websocketRef.current = ws;
+
+                ws.onopen = () => {
+                  // WebSocket 연결 성공
+                };
+
+                ws.onmessage = (event) => {
+                  try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'metrics') {
+                      handleMetricsData(data);
+                    }
+                  } catch (e) {
+                    // ignore parse errors
+                  }
+                };
+
+                ws.onerror = () => {
+                  // 에러는 조용히 처리, onclose에서 재연결
+                };
+
+                ws.onclose = (event) => {
+                  if (!stopped && event.code !== 1000) {  // 정상 종료(1000)가 아닌 경우만 재연결
+                    scheduleReconnect(5000);  // 재연결 간격 증가
+                  }
+                };
+              } else {
+                // 서버가 준비되지 않았으면 재시도
+                scheduleReconnect(5000);
+              }
             } else {
-              // console.warn('[PerformancePanel] Received non-metrics data:', data);
+              // 헬스 체크 실패 시 재시도
+              scheduleReconnect(5000);
             }
           } catch (e) {
-            // console.error('[PerformancePanel] Failed to parse metrics:', e, event.data);
+            // 서버가 아직 시작되지 않았거나 연결 불가 - 재시도
+            scheduleReconnect(5000);
           }
         };
-
-        ws.onerror = (error) => {
-          // console.error('[PerformancePanel] WebSocket error:', error);
-          // 에러 발생 시 즉시 재연결하지 않고, onclose에서 처리
-        };
-
-        ws.onclose = (event) => {
-          // console.log('[PerformancePanel] WebSocket closed:', event.code, event.reason);
-          if (!stopped && event.code !== 1000) {  // 정상 종료(1000)가 아닌 경우만 재연결
-            scheduleReconnect(3000);
-          }
-        };
+        
+        checkAndConnect();
       } else {
         // GGUF 모델: SSE 사용
         // autoload=1 ensures router spawns the model process even if not already loaded

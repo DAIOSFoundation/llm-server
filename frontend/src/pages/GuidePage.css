@@ -152,6 +152,13 @@
   border-radius: 12px;
   overflow: hidden;
   scroll-margin-top: 80px; /* Offset for fixed header */
+  outline: none; /* 포커스 시 기본 아웃라인 제거 */
+  transition: box-shadow 0.2s ease;
+}
+
+.guide-card:focus {
+  box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.5);
+  border-color: #4CAF50;
 }
 
 .guide-card-header {

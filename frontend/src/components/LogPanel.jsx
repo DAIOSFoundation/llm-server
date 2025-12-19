@@ -53,45 +53,71 @@ const LogPanel = () => {
 
       if (useWebSocket) {
         // MLX 모델: WebSocket 사용
-        const wsUrl = serverUrl.replace('http://', 'ws://').replace('https://', 'wss://');
-        const ws = new WebSocket(`${wsUrl}/logs/stream`);
-        websocketRef.current = ws;
-
-        ws.onopen = () => {
-          // WebSocket 연결 성공
-        };
-
-        ws.onmessage = (event) => {
+        // 서버가 준비되었는지 먼저 확인
+        const checkAndConnect = async () => {
           try {
-            const data = JSON.parse(event.data);
-            if (data.type === 'log' && data.text) {
-              const line = String(data.text).trimEnd();
-              if (line) {
-                setLogs(prev => [...prev, line]);
-                // server-log 이벤트 브로드캐스트 (Header에서 프로그레스 파싱용)
-                window.dispatchEvent(new CustomEvent('server-log', { detail: line }));
+            const healthResponse = await fetch(`${serverUrl}/health`, { signal: AbortSignal.timeout(2000) });
+            if (healthResponse.ok) {
+              const healthData = await healthResponse.json();
+              // 서버가 ready 상태이거나 loading 상태일 때만 연결 시도
+              if (healthData.status === 'ready' || healthData.status === 'loading') {
+                const wsUrl = serverUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+                const ws = new WebSocket(`${wsUrl}/logs/stream`);
+                websocketRef.current = ws;
+
+                ws.onopen = () => {
+                  // WebSocket 연결 성공
+                };
+
+                ws.onmessage = (event) => {
+                  try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'log' && data.text) {
+                      const line = String(data.text).trimEnd();
+                      if (line) {
+                        setLogs(prev => [...prev, line]);
+                        // server-log 이벤트 브로드캐스트 (Header에서 프로그레스 파싱용)
+                        window.dispatchEvent(new CustomEvent('server-log', { detail: line }));
+                      }
+                    } else if (data.type === 'progress' && data.text) {
+                      // 프로그레스 정보는 로그 패널에 표시하지 않고 Header로만 전달
+                      window.dispatchEvent(new CustomEvent('server-log', { detail: data.text }));
+                    }
+                  } catch (_e) {
+                    // ignore
+                  }
+                };
+
+                ws.onerror = () => {
+                  // 에러는 조용히 처리, onclose에서 재연결
+                };
+
+                ws.onclose = () => {
+                  if (!stopped) {
+                    setTimeout(connect, 5000);  // 재연결 간격 증가
+                  }
+                };
+              } else {
+                // 서버가 준비되지 않았으면 재시도
+                if (!stopped) {
+                  setTimeout(connect, 5000);
+                }
               }
-            } else if (data.type === 'progress' && data.text) {
-              // 프로그레스 정보는 로그 패널에 표시하지 않고 Header로만 전달
-              window.dispatchEvent(new CustomEvent('server-log', { detail: data.text }));
+            } else {
+              // 헬스 체크 실패 시 재시도
+              if (!stopped) {
+                setTimeout(connect, 5000);
+              }
             }
-          } catch (_e) {
-            // ignore
+          } catch (e) {
+            // 서버가 아직 시작되지 않았거나 연결 불가 - 재시도
+            if (!stopped) {
+              setTimeout(connect, 5000);
+            }
           }
         };
-
-        ws.onerror = () => {
-          // 에러 발생 시 재연결
-          if (!stopped) {
-            setTimeout(connect, 1000);
-          }
-        };
-
-        ws.onclose = () => {
-          if (!stopped) {
-            setTimeout(connect, 1000);
-          }
-        };
+        
+        checkAndConnect();
       } else {
         // GGUF 모델: SSE 사용
         const token = (() => {

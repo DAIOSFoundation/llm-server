@@ -24,7 +24,7 @@ const getExampleModelId = () => {
 
 const CodeCard = ({ id, title, description, code, isOpen, onToggle }) => {
   return (
-    <section id={id} className="guide-card">
+    <section id={id} className="guide-card" tabIndex={-1}>
       <div className="guide-card-header">
         <div className="guide-card-title-row">
           <h3>{title}</h3>
@@ -67,12 +67,12 @@ const GuidePage = () => {
     return {
       gguf: {
         title: 'GGUF Server (Port 8080)',
-        description: 'llama.cpp server APIs for GGUF format models',
+        description: t('guide.section.gguf.description'),
         cards: [
           {
             key: 'gguf-health',
             title: 'Health Check',
-            description: 'Check server health status',
+            description: t('guide.card.gguf-health.description'),
             code: `# curl
 curl -sS "${base}/health"
 
@@ -89,7 +89,7 @@ print(r.json())`,
           {
             key: 'gguf-models',
             title: 'List Models',
-            description: 'Get list of available models (Router Mode)',
+            description: t('guide.card.gguf-models.description'),
             code: `# curl
 curl -sS "${base}/models"
 
@@ -106,7 +106,7 @@ print(r.json())`,
           {
             key: 'gguf-load-model',
             title: 'Load Model',
-            description: 'Load a model (Router Mode)',
+            description: t('guide.card.gguf-load-model.description'),
             code: `# curl
 curl -X POST "${base}/models/load" \\
   -H "Content-Type: application/json" \\
@@ -129,7 +129,7 @@ print(r.json())`,
           {
             key: 'gguf-completion',
             title: 'Completion (SSE Streaming)',
-            description: 'Generate text completion with Server-Sent Events streaming',
+            description: t('guide.card.gguf-completion.description'),
             code: `# curl (SSE streaming)
 curl -N -X POST "${base}/completion" \\
   -H "Content-Type: application/json" \\
@@ -183,7 +183,7 @@ for line in r.iter_lines():
           {
             key: 'gguf-metrics',
             title: 'Get Metrics',
-            description: 'Get server performance metrics (Prometheus format)',
+            description: t('guide.card.gguf-metrics.description'),
             code: `# curl
 curl -sS "${base}/metrics"
 
@@ -200,7 +200,7 @@ print(r.text)`,
           {
             key: 'gguf-metrics-stream',
             title: 'Metrics Stream (SSE)',
-            description: 'Real-time metrics streaming via Server-Sent Events',
+            description: t('guide.card.gguf-metrics-stream.description'),
             code: `# curl (SSE streaming)
 curl -N "${base}/metrics/stream"
 
@@ -224,7 +224,7 @@ for line in r.iter_lines():
           {
             key: 'gguf-tokenize',
             title: 'Tokenize',
-            description: 'Convert text to tokens',
+            description: t('guide.card.gguf-tokenize.description'),
             code: `# curl
 curl -X POST "${base}/tokenize" \\
   -H "Content-Type: application/json" \\
@@ -248,7 +248,7 @@ print(r.json()["tokens"])`,
           {
             key: 'gguf-gguf-info',
             title: 'GGUF Info',
-            description: 'Get GGUF file metadata (quantization, tensor types, etc.)',
+            description: t('guide.card.gguf-gguf-info.description'),
             code: `# curl
 curl -X POST "${base}/gguf-info" \\
   -H "Content-Type: application/json" \\
@@ -272,7 +272,7 @@ print(r.json())`,
           {
             key: 'gguf-logs-stream',
             title: 'Logs Stream (SSE)',
-            description: 'Real-time server logs streaming via Server-Sent Events',
+            description: t('guide.card.gguf-logs-stream.description'),
             code: `# curl (SSE streaming)
 curl -N "${base}/logs/stream"
 
@@ -297,12 +297,12 @@ for line in r.iter_lines():
       },
       mlx: {
         title: 'MLX Server (Port 8081)',
-        description: 'Python FastAPI server APIs for MLX format models',
+        description: t('guide.section.mlx.description'),
         cards: [
           {
             key: 'mlx-health',
             title: 'Health Check',
-            description: 'Check server health status',
+            description: t('guide.card.mlx-health.description'),
             code: `# curl
 curl -sS "${mlxBase}/health"
 
@@ -319,7 +319,7 @@ print(r.json())`,
           {
             key: 'mlx-models',
             title: 'List Models',
-            description: 'Get list of available models',
+            description: t('guide.card.mlx-models.description'),
             code: `# curl
 curl -sS "${mlxBase}/models"
 
@@ -336,7 +336,7 @@ print(r.json())`,
           {
             key: 'mlx-chat-http',
             title: 'Chat (HTTP POST with SSE)',
-            description: 'Chat completion via HTTP POST with Server-Sent Events streaming',
+            description: t('guide.card.mlx-chat-http.description'),
             code: `# curl (SSE streaming)
 curl -N -X POST "${mlxBase}/chat" \\
   -H "Content-Type: application/json" \\
@@ -350,12 +350,12 @@ curl -N -X POST "${mlxBase}/chat" \\
 
 # JavaScript (SSE streaming)
 const res = await fetch("${mlxBase}/chat", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
     prompt: "Hello, world",
-    max_tokens: 128,
-    temperature: 0.7,
+      max_tokens: 128,
+      temperature: 0.7,
     top_p: 0.95,
     repeat_penalty: 1.1
   })
@@ -393,7 +393,7 @@ for line in r.iter_lines():
           {
             key: 'mlx-chat-websocket',
             title: 'Chat (WebSocket)',
-            description: 'Real-time chat completion via WebSocket with token-by-token streaming',
+            description: t('guide.card.mlx-chat-websocket.description'),
             code: `# JavaScript (WebSocket)
 const ws = new WebSocket("ws://localhost:8081/chat/ws");
 
@@ -453,7 +453,7 @@ asyncio.run(chat())`,
           {
             key: 'mlx-completion',
             title: 'Completion (llama.cpp compatible)',
-            description: 'Completion endpoint compatible with llama.cpp API (SSE streaming)',
+            description: t('guide.card.mlx-completion.description'),
             code: `# curl (SSE streaming)
 curl -N -X POST "${mlxBase}/completion" \\
   -H "Content-Type: application/json" \\
@@ -468,13 +468,13 @@ curl -N -X POST "${mlxBase}/completion" \\
 
 # JavaScript (SSE streaming)
 const res = await fetch("${mlxBase}/completion", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
     prompt: "Hello, world",
     stream: true,
     n_predict: 128,
-    temperature: 0.7,
+          temperature: 0.7,
     top_p: 0.95,
     repeat_penalty: 1.1
   })
@@ -513,7 +513,7 @@ for line in r.iter_lines():
           {
             key: 'mlx-metrics',
             title: 'Get Metrics',
-            description: 'Get server performance metrics (VRAM, CPU, token speed)',
+            description: t('guide.card.mlx-metrics.description'),
             code: `# curl
 curl -sS "${mlxBase}/metrics"
 
@@ -530,7 +530,7 @@ print(r.json())`,
           {
             key: 'mlx-metrics-websocket',
             title: 'Metrics Stream (WebSocket)',
-            description: 'Real-time metrics streaming via WebSocket',
+            description: t('guide.card.mlx-metrics-websocket.description'),
             code: `# JavaScript (WebSocket)
 const ws = new WebSocket("ws://localhost:8081/metrics/stream");
 
@@ -559,7 +559,7 @@ asyncio.run(metrics())`,
           {
             key: 'mlx-tokenize',
             title: 'Tokenize',
-            description: 'Convert text to tokens',
+            description: t('guide.card.mlx-tokenize.description'),
             code: `# curl
 curl -X POST "${mlxBase}/tokenize" \\
   -H "Content-Type: application/json" \\
@@ -583,7 +583,7 @@ print(r.json()["tokens"])`,
           {
             key: 'mlx-logs-websocket',
             title: 'Logs Stream (WebSocket)',
-            description: 'Real-time server logs streaming via WebSocket',
+            description: t('guide.card.mlx-logs-websocket.description'),
             code: `# JavaScript (WebSocket)
 const ws = new WebSocket("ws://localhost:8081/logs/stream");
 
@@ -614,12 +614,12 @@ asyncio.run(logs())`,
       },
       auth: {
         title: 'Authentication Server (Port 8082)',
-        description: 'User authentication APIs (login, logout, setup)',
+        description: t('guide.section.auth.description'),
         cards: [
           {
             key: 'auth-status',
             title: 'Get Status',
-            description: 'Check authentication server status',
+            description: t('guide.card.auth-status.description'),
             code: `# curl
 curl -sS "${authBase}/auth/status"
 
@@ -636,7 +636,7 @@ print(r.json())`,
           {
             key: 'auth-setup',
             title: 'Setup (Create Super Admin)',
-            description: 'Create super admin account (first run only)',
+            description: t('guide.card.auth-setup.description'),
             code: `# curl
 curl -X POST "${authBase}/auth/setup" \\
   -H "Content-Type: application/json" \\
@@ -660,7 +660,7 @@ print(r.json())`,
           {
             key: 'auth-login',
             title: 'Login',
-            description: 'Login with super admin credentials',
+            description: t('guide.card.auth-login.description'),
             code: `# curl
 curl -X POST "${authBase}/auth/login" \\
   -H "Content-Type: application/json" \\
@@ -689,7 +689,7 @@ print(r.json())
           {
             key: 'auth-logout',
             title: 'Logout',
-            description: 'Logout and clear session',
+            description: t('guide.card.auth-logout.description'),
             code: `# curl
 curl -X POST "${authBase}/auth/logout" \\
   -b cookies.txt
@@ -714,12 +714,12 @@ print(r.json())`,
       },
       client: {
         title: 'Client Server Manager (Port 8083)',
-        description: 'Client server manager APIs for model configuration',
+        description: t('guide.section.client.description'),
         cards: [
           {
             key: 'client-save-config',
             title: 'Save Config',
-            description: 'Save model configuration and automatically start servers',
+            description: t('guide.card.client-save-config.description'),
             code: `# curl
 curl -X POST "${clientBase}/api/save-config" \\
   -H "Content-Type: application/json" \\
@@ -773,33 +773,78 @@ print(r.json())`,
         ],
       },
     };
-  }, [modelId]);
+  }, [modelId, t]);
 
   const currentSection = apiSections[activeSection] || apiSections.gguf;
   const [activeAnchor, setActiveAnchor] = useState(null);
   const contentRef = useRef(null);
 
-  // default: collapsed
+  // default: collapsed (아코디언 방식: 하나만 열림)
   const [openCards, setOpenCards] = useState(() => ({}));
 
   const isCardOpen = (key) => Boolean(openCards[key]);
-  const toggleCard = (key) => {
-    setOpenCards((prev) => ({ ...(prev || {}), [key]: !prev?.[key] }));
+  const toggleCard = (key, shouldScroll = true) => {
+    setOpenCards((prev) => {
+      const isCurrentlyOpen = Boolean(prev?.[key]);
+      // 아코디언 방식: 클릭한 카드가 이미 열려있으면 닫고, 아니면 다른 모든 카드를 닫고 이 카드만 열기
+      if (isCurrentlyOpen) {
+        // 이미 열려있으면 닫기
+        return { ...(prev || {}), [key]: false };
+      } else {
+        // 다른 모든 카드를 닫고 이 카드만 열기
+        // 카드가 열릴 때 해당 섹션으로 스크롤 및 포커스
+        if (shouldScroll) {
+          setTimeout(() => {
+            const element = document.getElementById(key);
+            if (element) {
+              const offset = 80; // Offset for fixed header
+              const elementPosition = element.getBoundingClientRect().top;
+              const offsetPosition = elementPosition + window.pageYOffset - offset;
+
+              // 스크롤 이동
+              window.scrollTo({
+                top: offsetPosition,
+                behavior: 'smooth'
+              });
+              
+              // 포커스 설정 (접근성 및 키보드 네비게이션 지원)
+              element.focus({ preventScroll: true });
+              element.setAttribute('tabindex', '-1');
+              
+              setActiveAnchor(key);
+            }
+          }, 150); // 카드가 열리는 애니메이션을 기다림
+        }
+        return { [key]: true };
+      }
+    });
   };
 
-  // Scroll to anchor
+  // Scroll to anchor and open the card
   const scrollToAnchor = (anchorId) => {
     const element = document.getElementById(anchorId);
     if (element) {
-      const offset = 80; // Offset for fixed header
-      const elementPosition = element.getBoundingClientRect().top;
-      const offsetPosition = elementPosition + window.pageYOffset - offset;
+      // 해당 카드가 닫혀있으면 먼저 열기 (스크롤과 포커스는 toggleCard에서 처리)
+      if (!isCardOpen(anchorId)) {
+        toggleCard(anchorId, true);
+      } else {
+        // 이미 열려있으면 스크롤 및 포커스만 이동
+        const offset = 80; // Offset for fixed header
+        const elementPosition = element.getBoundingClientRect().top;
+        const offsetPosition = elementPosition + window.pageYOffset - offset;
 
-      window.scrollTo({
-        top: offsetPosition,
-        behavior: 'smooth'
-      });
-      setActiveAnchor(anchorId);
+        // 스크롤 이동
+        window.scrollTo({
+          top: offsetPosition,
+          behavior: 'smooth'
+        });
+        
+        // 포커스 설정 (접근성 및 키보드 네비게이션 지원)
+        element.focus({ preventScroll: true });
+        element.setAttribute('tabindex', '-1');
+        
+        setActiveAnchor(anchorId);
+      }
     }
   };
 
@@ -864,21 +909,21 @@ print(r.json())`,
 
       {/* Main Content */}
       <div className="guide-content" ref={contentRef}>
-        <div className="guide-header">
-          <h2>{t('guide.title')}</h2>
-          <p>{t('guide.subtitle')}</p>
-          <div className="guide-meta">
-            <div>
-              <span className="guide-meta-label">{t('guide.baseUrlLabel')}</span>
-              <code className="guide-inline-code">{LLAMA_BASE_URL}</code>
-            </div>
-            <div>
-              <span className="guide-meta-label">{t('guide.exampleModelId')}</span>
-              <code className="guide-inline-code">{modelId}</code>
-            </div>
+      <div className="guide-header">
+        <h2>{t('guide.title')}</h2>
+        <p>{t('guide.subtitle')}</p>
+        <div className="guide-meta">
+          <div>
+            <span className="guide-meta-label">{t('guide.baseUrlLabel')}</span>
+            <code className="guide-inline-code">{LLAMA_BASE_URL}</code>
           </div>
-          <div className="guide-note">{t('guide.routerNote')}</div>
+          <div>
+            <span className="guide-meta-label">{t('guide.exampleModelId')}</span>
+            <code className="guide-inline-code">{modelId}</code>
+          </div>
         </div>
+        <div className="guide-note">{t('guide.routerNote')}</div>
+      </div>
 
         {/* Section Tabs */}
         <div className="guide-section-tabs">
@@ -906,18 +951,18 @@ print(r.json())`,
         </div>
 
         {/* API Cards */}
-        <div className="guide-grid">
+      <div className="guide-grid">
           {currentSection.cards.map((c) => (
-            <CodeCard
-              key={c.key}
+          <CodeCard
+            key={c.key}
               id={c.key}
-              title={c.title}
-              description={c.description}
-              code={c.code}
-              isOpen={isCardOpen(c.key)}
-              onToggle={() => toggleCard(c.key)}
-            />
-          ))}
+            title={c.title}
+            description={c.description}
+            code={c.code}
+            isOpen={isCardOpen(c.key)}
+            onToggle={() => toggleCard(c.key)}
+          />
+        ))}
         </div>
       </div>
     </div>
