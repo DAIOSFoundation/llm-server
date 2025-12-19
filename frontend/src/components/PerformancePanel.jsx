@@ -15,7 +15,7 @@ const PerformancePanel = () => {
   const [tokenSpeed, setTokenSpeed] = useState(0);
   const [tokenCount, setTokenCount] = useState(0);
   const tokenSpeedRef = useRef(0);
-  const lastTokenTimeRef = useRef(Date.now());
+  const lastTokenTimeRef = useRef(0); // 첫 토큰이 올 때 초기화
   const tokenCountRef = useRef(0);
   const contextSizeRef = useRef(2048);
   const lastProcCpuSecondsRef = useRef(null);
@@ -48,12 +48,17 @@ const PerformancePanel = () => {
     // 토큰 속도 업데이트를 위한 전역 이벤트 리스너
     const handleTokenReceived = () => {
       const now = Date.now();
-      const timeDiff = now - lastTokenTimeRef.current;
       
+      // 첫 토큰인 경우 시간 초기화
+      if (lastTokenTimeRef.current === 0 || tokenCountRef.current === 0) {
+        lastTokenTimeRef.current = now;
+      }
+      
+      const timeDiff = now - lastTokenTimeRef.current;
       tokenCountRef.current += 1;
       
-      // 1초마다 속도 계산
-      if (timeDiff >= 1000) {
+      // 0.5초 이상 경과했거나, 1초마다 속도 계산
+      if (timeDiff >= 500) {
         const tokensPerSecond = (tokenCountRef.current / timeDiff) * 1000;
         tokenSpeedRef.current = tokensPerSecond;
         setTokenSpeed(tokensPerSecond);
@@ -177,6 +182,9 @@ const PerformancePanel = () => {
       window.removeEventListener('config-updated', handleConfigUpdate);
       if (interval) clearInterval(interval);
       clearInterval(configCheckInterval);
+      // 리셋
+      lastTokenTimeRef.current = 0;
+      tokenCountRef.current = 0;
     };
   }, []);
 
@@ -297,8 +305,17 @@ const PerformancePanel = () => {
           lastProcCpuSampleAtRef.current = now;
 
           const tps = Number(data.tps || 0);
-          setTokenSpeed(Math.max(0, tps));
-          // console.log('[PerformancePanel] Set tokenSpeed:', tps);
+          // 서버 메트릭의 tps 값이 0보다 크면 사용
+          if (tps > 0) {
+            setTokenSpeed(Math.max(0, tps));
+            tokenSpeedRef.current = tps;
+          }
+          // 서버 메트릭이 0이어도 클라이언트 측 계산 값이 있으면 사용 (더 정확한 실시간 속도)
+          // 클라이언트 측 계산이 더 최근 데이터를 반영하므로 우선순위를 높임
+          if (tokenSpeedRef.current > 0) {
+            setTokenSpeed(tokenSpeedRef.current);
+          }
+          // console.log('[PerformancePanel] Set tokenSpeed - server:', tps, 'client:', tokenSpeedRef.current);
           
           // GPU 게이지는 실제 GPU 점유율을 얻기 어려워(플랫폼별/백엔드별),
           // router 모드에서는 VRAM 점유율(%)을 GPU 지표로 사용한다.

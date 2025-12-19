@@ -55,6 +55,8 @@ tokens_generated = 0
 tokens_generated_total = 0
 generation_start_time = None
 last_token_time = None
+# 최근 토큰 생성 시간 추적 (슬라이딩 윈도우)
+recent_token_times = []  # 최근 토큰 생성 시간 리스트
 
 # 로그 브로드캐스트 (전역 로그 리스트에 추가)
 log_messages = []
@@ -156,7 +158,14 @@ async def lifespan(app: FastAPI):
                                 bar_length = 30
                                 filled = int(bar_length * estimated_progress / 100)
                                 bar = '█' * filled + '░' * (bar_length - filled)
-                                await broadcast_log_async(f"Loading progress: [{bar}] {estimated_progress:.1f}% ({loaded_size / 1024 / 1024:.1f} MB loaded)")
+                                # 프로그레스 정보를 WebSocket으로 전송 (로그 패널에는 표시되지 않음)
+                                progress_message = f"Loading progress: [{bar}] {estimated_progress:.1f}% ({loaded_size / 1024 / 1024:.1f} MB loaded)"
+                                # server-log 이벤트만 발생 (로그 패널에는 추가하지 않음)
+                                for ws in log_websockets:
+                                    try:
+                                        await ws.send_json({"type": "progress", "text": progress_message, "progress": estimated_progress})
+                                    except:
+                                        pass
                                 last_loaded_size = estimated_progress
                     else:
                         # 크기를 알 수 없는 경우 메모리 사용량만 표시
@@ -262,11 +271,22 @@ def get_system_metrics():
         cpu_times = process.cpu_times()
         proc_cpu_sec = cpu_times.user + cpu_times.system
         
-        # 토큰 생성 속도 계산
+        # 토큰 생성 속도 계산 (최근 2초 동안의 토큰 생성 속도)
         tps = 0.0
-        global tokens_generated, generation_start_time, last_token_time
-        if tokens_generated > 0 and generation_start_time:
-            elapsed = time.time() - generation_start_time
+        global tokens_generated, generation_start_time, last_token_time, recent_token_times
+        current_time = time.time()
+        
+        # 최근 2초 이내의 토큰만 카운트
+        recent_token_times = [t for t in recent_token_times if current_time - t <= 2.0]
+        
+        if len(recent_token_times) > 0:
+            # 최근 토큰들의 시간 범위
+            time_span = current_time - min(recent_token_times)
+            if time_span > 0:
+                tps = len(recent_token_times) / time_span
+        elif tokens_generated > 0 and generation_start_time:
+            # 폴백: 전체 생성 시간 동안의 평균 속도
+            elapsed = current_time - generation_start_time
             if elapsed > 0:
                 tps = tokens_generated / elapsed
         
@@ -533,6 +553,11 @@ async def chat(request: Request):
                     tokens_generated += 1
                     tokens_generated_total += 1
                     last_token_time = time.time()
+                    # 최근 토큰 생성 시간 기록
+                    recent_token_times.append(last_token_time)
+                    # 2초 이전의 기록은 제거 (메모리 절약)
+                    current_time = time.time()
+                    recent_token_times = [t for t in recent_token_times if current_time - t <= 2.0]
                     
                     # 메트릭 업데이트 (5토큰마다)
                     if token_count % 5 == 0:
@@ -716,6 +741,14 @@ async def chat_websocket(websocket: WebSocket):
                     await websocket.send_json({"type": "token", "content": token_text})
                 
                 token_count += 1
+                tokens_generated += 1
+                tokens_generated_total += 1
+                last_token_time = time.time()
+                # 최근 토큰 생성 시간 기록
+                recent_token_times.append(last_token_time)
+                # 2초 이전의 기록은 제거 (메모리 절약)
+                current_time = time.time()
+                recent_token_times = [t for t in recent_token_times if current_time - t <= 2.0]
                 
                 # 메트릭 업데이트 (5토큰마다)
                 if token_count % 5 == 0:
@@ -914,6 +947,11 @@ async def completion(request: Request):
                     tokens_generated += 1
                     tokens_generated_total += 1
                     last_token_time = time.time()
+                    # 최근 토큰 생성 시간 기록
+                    recent_token_times.append(last_token_time)
+                    # 2초 이전의 기록은 제거 (메모리 절약)
+                    current_time = time.time()
+                    recent_token_times = [t for t in recent_token_times if current_time - t <= 2.0]
                     
                     # 메트릭 업데이트 (5토큰마다)
                     if token_count % 5 == 0:

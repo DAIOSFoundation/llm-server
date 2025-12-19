@@ -71,6 +71,9 @@ const LogPanel = () => {
                 // server-log 이벤트 브로드캐스트 (Header에서 프로그레스 파싱용)
                 window.dispatchEvent(new CustomEvent('server-log', { detail: line }));
               }
+            } else if (data.type === 'progress' && data.text) {
+              // 프로그레스 정보는 로그 패널에 표시하지 않고 Header로만 전달
+              window.dispatchEvent(new CustomEvent('server-log', { detail: data.text }));
             }
           } catch (_e) {
             // ignore
