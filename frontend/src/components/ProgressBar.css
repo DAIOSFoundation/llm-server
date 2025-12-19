@@ -11,11 +11,11 @@
 .progress-bar {
   height: 100%;
   background: linear-gradient(90deg, 
-    rgba(74, 158, 255, 0) 0%,
-    rgba(74, 158, 255, 0.8) 25%,
-    rgba(74, 158, 255, 1) 50%,
-    rgba(74, 158, 255, 0.8) 75%,
-    rgba(74, 158, 255, 0) 100%
+    rgba(76, 175, 80, 0) 0%,
+    rgba(76, 175, 80, 0.8) 25%,
+    rgba(76, 175, 80, 1) 50%,
+    rgba(76, 175, 80, 0.8) 75%,
+    rgba(76, 175, 80, 0) 100%
   );
   animation: loading-progress 1.5s infinite ease-in-out;
   transform-origin: left center;

@@ -1,4 +1,4 @@
-# LLM Server (llama.cpp + MLX + React)
+# LLM Lab (llama.cpp + MLX + React)
 
 This project serves LLMs via **`llama.cpp`'s `llama-server`** (GGUF format) and **MLX Python API** (MLX format), providing a React UI for configuration, chat, and monitoring.
 
@@ -37,10 +37,10 @@ llm-server/
 ├─ llama.cpp/                     # llama.cpp (Git submodule)
 │  └─ build/bin/llama-server      # GGUF server executable
 │
-├─ mlx/                           # MLX server (Python 기반)
+├─ mlx/                           # MLX server (Python-based)
 │  ├─ server-python-direct.py    # MLX HTTP/WebSocket server (port 8081, FastAPI)
-│  ├─ requirements.txt            # Python 의존성
-│  ├─ venv/                       # Python 가상환경
+│  ├─ requirements.txt            # Python dependencies
+│  ├─ venv/                       # Python virtual environment
 │  └─ models/                      # MLX model directory
 │
 ├─ native/                        # Metal VRAM monitoring native module
@@ -69,11 +69,11 @@ llm-server/
 - **Startup**: Auto-started by `start-client-server.js` or manually executed
 
 #### 2. MLX Server (Port 8081)
-- **Server File**: `mlx/server-python-direct.py` (FastAPI 기반 Python HTTP/WebSocket 서버)
+- **Server File**: `mlx/server-python-direct.py` (FastAPI-based Python HTTP/WebSocket server)
 - **Framework**: FastAPI + Uvicorn
 - **Functionality**: MLX format model loading and inference with real-time WebSocket streaming
 - **Startup**: Auto-started by `start-client-server.js` (uses venv Python) or manually executed
-- **Note**: Python FastAPI 기반 서버는 mlx_lm 라이브러리를 사용하여 안정적으로 모델을 로드하고 추론을 수행하며, WebSocket을 통한 실시간 스트리밍을 지원합니다.
+- **Note**: The Python FastAPI-based server uses the mlx_lm library to reliably load models and perform inference, supporting real-time streaming via WebSocket.
 
 #### 3. Authentication Server (Port 8082)
 - **Server File**: `auth-server.js`
@@ -154,11 +154,17 @@ llm-server/
   - Reads GGUF via `POST /gguf-info` and shows a summary of **quantization / tensor types / QKV types**
   - When loading settings, if a model ID exists, metadata is **fetched automatically** and the summary is shown
 - **MLX Python Implementation**
-  - Python mlx_lm library integration via subprocess
+  - Python mlx_lm library integration via FastAPI server
   - Automatic model loading, sharding, and weight merging
   - Built-in tokenization support
   - Sampling strategies (Temperature, Top-P, Repetition Penalty)
-  - Streaming token generation with SSE
+  - Multiple streaming options:
+    - HTTP POST with SSE streaming (`/chat`, `/completion`)
+    - WebSocket real-time streaming (`/chat/ws`)
+  - Real-time metrics streaming via WebSocket (`/metrics/stream`)
+  - Real-time log streaming via WebSocket (`/logs/stream`)
+  - Model loading progress tracking with memory usage monitoring
+  - llama.cpp API compatibility (`/completion` endpoint)
 - **Real-time Performance Metrics (Push-based)**
   - Updates VRAM / memory / CPU / token speed via `GET /metrics/stream` (SSE) **without polling**
 - **GPU “Utilization (Compute Busy %)”**
@@ -221,15 +227,17 @@ Both GGUF and MLX servers run **simultaneously**. The frontend automatically sel
 
 ### MLX Server (MLX Models) - Port 8081
 
-- **Health**: `GET /health`
-- **Models**: `GET /models`
-- **Completion**: `POST /completion` (streaming SSE)
-- **Metrics**
-  - `GET /metrics` (VRAM and performance metrics)
-  - `GET /metrics/stream` (SSE, for the real-time panel)
-- **Tokenization**: `POST /tokenize` (text to tokens)
-- **Model Verification**: `POST /mlx-verify` (verify MLX model directory and config.json)
-- **Logs**: `GET /logs/stream` (SSE, server logs)
+- **Health**: `GET /health` - Server health status
+- **Models**: `GET /models` - List available models
+- **Chat Completion**:
+  - `POST /chat` - HTTP POST with SSE streaming response
+  - `WebSocket /chat/ws` - WebSocket-based real-time chat with token-by-token streaming
+- **Completion (llama.cpp compatible)**: `POST /completion` - SSE streaming (compatible with llama.cpp API)
+- **Metrics**:
+  - `GET /metrics` - Current VRAM and performance metrics (JSON)
+  - `WebSocket /metrics/stream` - Real-time metrics streaming via WebSocket (for the real-time panel)
+- **Tokenization**: `POST /tokenize` - Text to tokens conversion
+- **Logs**: `WebSocket /logs/stream` - Real-time server logs streaming via WebSocket
 
 ### Authentication Server - Port 8082
 
@@ -296,34 +304,34 @@ cmake --build . --config Release -j 8
 cd ../..
 ```
 
-### 3) MLX 서버 설정 (MLX 모델 사용 시)
+### 3) MLX Server Setup (for MLX models)
 
-MLX 서버는 Python FastAPI 기반으로 동작하며 WebSocket을 통한 실시간 스트리밍을 지원합니다.
+The MLX server is Python FastAPI-based and supports real-time streaming via WebSocket.
 
 ```bash
-# Python 가상환경 생성 및 의존성 설치
+# Create Python virtual environment and install dependencies
 cd mlx
 python3 -m venv venv
 source venv/bin/activate  # macOS/Linux
-# 또는 venv\Scripts\activate  # Windows
+# or venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 
-# 서버 실행 (venv 활성화 후)
+# Run server (after activating venv)
 python3 server-python-direct.py
 ```
 
-**장점:**
-- ✅ mlx_lm이 샤딩, 구조, 가중치 병합을 자동으로 처리
-- ✅ 모델 구조 변경 시 `pip install -U mlx-lm`만으로 업데이트 가능
-- ✅ 안정성과 유지보수성 향상
-- ✅ DeepSeek-MoE 같은 복잡한 모델도 완벽하게 지원
-- ✅ WebSocket 기반 실시간 스트리밍 (토큰, 메트릭, 로그)
+**Advantages:**
+- ✅ mlx_lm automatically handles sharding, structure, and weight merging
+- ✅ Model structure updates via `pip install -U mlx-lm` only
+- ✅ Enhanced stability and maintainability
+- ✅ Full support for complex models like DeepSeek-MoE
+- ✅ WebSocket-based real-time streaming (tokens, metrics, logs)
 
-**환경 변수:**
+**Environment Variables:**
 ```bash
-# 모델 경로 지정 (필수)
+# Specify model path (required)
 export MLX_MODEL_PATH="./models/deepseek-moe-16b-chat-mlx-q4_0"
-# 포트 지정 (선택사항, 기본값: 8081)
+# Specify port (optional, default: 8081)
 export PORT=8081
 python3 server-python-direct.py
 ```
@@ -463,7 +471,15 @@ The MLX server uses Python's mlx_lm library:
   - Layer Normalization
 - **Tokenization**: Uses mlx_lm's built-in tokenizer
 - **Sampling**: Supports Temperature, Top-P, Repetition Penalty
-- **Streaming**: Async token generation and SSE streaming via `stream_generate()`
+- **Streaming**: 
+  - Async token generation with multiple streaming options
+  - HTTP POST with SSE streaming (`/chat`, `/completion`)
+  - WebSocket real-time streaming (`/chat/ws`)
+  - Real-time metrics and logs via WebSocket (`/metrics/stream`, `/logs/stream`)
+- **API Compatibility**: 
+  - Frontend UI integration via `/chat` endpoint
+  - llama.cpp compatibility via `/completion` endpoint
+  - WebSocket support for real-time applications
 
 ### MLX Model Requirements
 
@@ -536,64 +552,65 @@ When you change the model in the dropdown:
 
 ### MLX Server Testing
 
-MLX 서버의 추론 기능을 테스트하기 위한 자동화된 테스트 스크립트가 제공됩니다.
+Automated test scripts are provided to test the MLX server's inference functionality.
 
-#### 서버 실행 방법
+#### Manual Server Execution
 
-MLX 서버를 수동으로 실행하려면:
+To run the MLX server manually:
 
 ```bash
 cd mlx
-node server.js
+source venv/bin/activate  # Activate virtual environment
+python3 server-python-direct.py
 ```
 
-서버는 기본적으로 **포트 8081**에서 실행됩니다.
+The server runs on port **8081** by default.
 
-#### 추론 테스트 실행 방법
+#### Running Inference Tests
 
-추론 테스트를 실행하려면:
+To run inference tests:
 
 ```bash
 cd mlx
 node test-inference.js
 ```
 
-**테스트 스크립트 동작 방식:**
+**Test Script Behavior:**
 
-1. **자동 서버 시작**: 테스트 스크립트는 MLX 서버가 실행 중이 아니면 자동으로 시작합니다.
-2. **헬스 체크**: 서버가 준비될 때까지 최대 3회 재시도하며, 각 재시도 간 1초 대기합니다.
-3. **메트릭 수집**: 서버의 성능 메트릭을 수집합니다.
-4. **추론 요청**: 테스트 프롬프트(`안녕, 대한민국의 수도는 어디지?`)로 추론을 요청합니다.
-5. **결과 확인**: 추론 결과를 확인하고 성공/실패를 기록합니다.
+1. **Automatic Server Start**: The test script automatically starts the MLX server if it's not already running.
+2. **Health Check**: Retries up to 3 times with 1-second intervals until the server is ready.
+3. **Metrics Collection**: Collects server performance metrics.
+4. **Inference Request**: Sends an inference request with a test prompt.
+5. **Result Verification**: Verifies inference results and records success/failure.
 
-**테스트 설정:**
+**Test Configuration:**
 
-- **서버 포트**: 8081 (기본값)
-- **테스트 프롬프트**: `안녕, 대한민국의 수도는 어디지?`
-- **헬스 체크 재시도**: 최대 3회
-- **서버 시작 타임아웃**: 30초
-- **추론 타임아웃**: 60초
+- **Server Port**: 8081 (default)
+- **Test Prompt**: Configurable in test script
+- **Health Check Retries**: Maximum 3 attempts
+- **Server Start Timeout**: 30 seconds
+- **Inference Timeout**: 60 seconds
 
-**테스트 결과:**
+**Test Results:**
 
-테스트가 완료되면 다음 정보가 출력됩니다:
-- 성공한 테스트 수
-- 실패한 테스트 수
-- 각 테스트의 상세 로그
+Upon completion, the test outputs:
+- Number of successful tests
+- Number of failed tests
+- Detailed logs for each test
 
-**주의사항:**
+**Notes:**
 
-- 테스트를 실행하기 전에 MLX 모델이 `mlx/models/` 디렉토리에 올바르게 설정되어 있어야 합니다.
-- 서버가 이미 실행 중인 경우, 테스트 스크립트는 기존 서버를 사용합니다.
-- 테스트 중 서버가 크래시되면 자동으로 재시작을 시도합니다.
+- Ensure MLX models are properly configured in the `mlx/models/` directory before running tests.
+- If the server is already running, the test script uses the existing server.
+- If the server crashes during testing, automatic restart is attempted.
 
 ### GGUF Server Testing
 
-GGUF 서버의 테스트는 `llama.cpp`의 기본 테스트 도구를 사용할 수 있습니다:
+GGUF server testing can be performed using `llama.cpp`'s default testing tools:
 
 ```bash
 cd llama.cpp
-# llama-server가 실행 중인 상태에서
+# With llama-server running
 curl -X POST http://localhost:8080/completion \
   -H "Content-Type: application/json" \
   -d '{"prompt": "Hello, world", "n_predict": 10}'

@@ -103,6 +103,10 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
     const contextSize = config.contextSize || 2048;
     const model = (config.modelPath || '').trim();
     
+    // 모델 형식 확인
+    const modelFormat = getActiveModelFormat();
+    const useWebSocket = modelFormat === 'mlx';
+    
     // 서버의 tokenize API를 사용하여 정확한 토큰 수 계산
     const promptTokens = await countTokens(prompt);
     const promptLength = prompt.length;
@@ -165,6 +169,63 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
        dynamicNPredict = -1;
     }
     
+    const serverUrl = getActiveServerUrl();
+    
+    // MLX 모델은 WebSocket 사용
+    if (useWebSocket && typeof WebSocket !== 'undefined') {
+      return new Promise((resolve, reject) => {
+        const wsUrl = serverUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+        const ws = new WebSocket(`${wsUrl}/chat/ws`);
+        
+        ws.onopen = () => {
+          ws.send(JSON.stringify({
+            prompt: prompt,
+            max_tokens: dynamicNPredict > 0 ? dynamicNPredict : 2048,
+            temperature: config.temperature ?? 0.7,
+            top_p: config.topP || 0.95,
+            min_p: config.minP || 0.05,
+            repeat_penalty: config.repeatPenalty || 1.1,
+            repeat_last_n: config.repeatLastN || 64,
+          }));
+        };
+        
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'token' && data.content) {
+              let token = data.content;
+              // 스페셜 토큰 표시가 꺼져있으면 스페셜 토큰 제거
+              if (!showSpecialTokens) {
+                token = token.replace(/<\|[^>]*\|>/g, '');
+              }
+              if (token) {
+                onToken(token);
+                window.dispatchEvent(new CustomEvent('token-received'));
+              }
+            } else if (data.type === 'done') {
+              ws.close();
+              resolve();
+            } else if (data.type === 'error') {
+              ws.close();
+              reject(new Error(data.message || 'WebSocket error'));
+            }
+          } catch (e) {
+            console.error('Failed to parse WebSocket message:', e);
+          }
+        };
+        
+        ws.onerror = (error) => {
+          ws.close();
+          reject(new Error('WebSocket connection error'));
+        };
+        
+        ws.onclose = () => {
+          resolve();
+        };
+      });
+    }
+    
+    // GGUF 모델은 기존 HTTP POST + SSE 방식 사용
     // llama.cpp server uses snake_case for parameters
     const payload = {
       model,
@@ -195,7 +256,6 @@ export const sendChatMessage = async (messages, onToken, language = 'ko', showSp
 
     // console.log('[API] Request Payload:', JSON.stringify(payload, null, 2)); // 디버그용 Payload 로그 추가
 
-    const serverUrl = getActiveServerUrl();
     const response = await fetch(`${serverUrl}/completion`, {
       method: 'POST',
       headers: {
