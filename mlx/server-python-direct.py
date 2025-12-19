@@ -574,9 +574,9 @@ async def chat(request: Request):
                     if token_count % 5 == 0:
                         broadcast_metrics()
                     
-                    # 토큰 생성 로그
-                    if token_count % 10 == 0:  # 10토큰마다 로그
-                        broadcast_log(f"Generated {token_count} tokens...")
+                    # 토큰 생성 로그 (제거됨)
+                    # if token_count % 10 == 0:  # 10토큰마다 로그
+                    #     broadcast_log(f"Generated {token_count} tokens...")
                 
                 # 완료 신호
                 yield f"data: {json.dumps({'stop': True})}\n\n"
@@ -775,9 +775,9 @@ async def chat_websocket(websocket: WebSocket):
                 if eos_token_id is not None and token_id == eos_token_id:
                     break
                 
-                # 토큰 생성 로그
-                if token_count % 10 == 0:
-                    broadcast_log(f"Generated {token_count} tokens...")
+                # 토큰 생성 로그 (제거됨)
+                # if token_count % 10 == 0:
+                #     broadcast_log(f"Generated {token_count} tokens...")
             
             # 완료 신호
             await websocket.send_json({"type": "done", "stop": True})
@@ -955,9 +955,9 @@ async def completion(request: Request):
                     if token_count % 5 == 0:
                         broadcast_metrics()
                     
-                    # 토큰 생성 로그
-                    if token_count % 10 == 0:
-                        broadcast_log(f"Generated {token_count} tokens...")
+                    # 토큰 생성 로그 (제거됨)
+                    # if token_count % 10 == 0:
+                    #     broadcast_log(f"Generated {token_count} tokens...")
                 
                 # 완료 신호
                 yield f"data: {json.dumps({'stop': True})}\n\n"

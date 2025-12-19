@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import LanguageSelector from './LanguageSelector';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
-import { getActiveServerUrl } from '../services/api';
+import { getActiveServerUrl, getActiveModelFormat } from '../services/api';
 import './Header.css';
 
 const Header = () => {
@@ -16,6 +16,83 @@ const Header = () => {
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [isModelLoading, setIsModelLoading] = useState(false);
 
+  // 페이지 로드 시 서버의 현재 로딩 상태 확인
+  useEffect(() => {
+    const checkServerLoadingStatus = async () => {
+      try {
+        const serverUrl = getActiveServerUrl();
+        const modelFormat = getActiveModelFormat();
+        
+        if (!serverUrl || !config?.activeModelId) return;
+        
+        const response = await fetch(`${serverUrl}/health`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(2000),
+        });
+        
+        // MLX 서버의 경우
+        if (modelFormat === 'mlx') {
+          if (response.ok) {
+            const data = await response.json();
+            if (data.status === 'loading') {
+              setIsModelLoading(true);
+              setLoadingProgress(0); // 초기 상태는 0%
+            } else if (data.status === 'ready') {
+              setIsModelLoading(false);
+              setLoadingProgress(100); // 완료 상태
+            }
+          }
+        } else {
+          // GGUF 서버의 경우
+          // 503 상태 코드는 "Loading model"을 의미함
+          if (response.status === 503) {
+            setIsModelLoading(true);
+            setLoadingProgress(0);
+          } else if (response.ok) {
+            // 서버가 준비되었으면 /models 엔드포인트에서 모델 상태 확인 (router 모드인 경우)
+            try {
+              const modelsResponse = await fetch(`${serverUrl}/models`, {
+                signal: AbortSignal.timeout(2000),
+              });
+              if (modelsResponse.ok) {
+                const modelsData = await modelsResponse.json();
+                const activeModelId = config?.activeModelId;
+                if (activeModelId && modelsData.data) {
+                  const model = modelsData.data.find((m) => m.id === activeModelId);
+                  if (model?.status?.value === 'loading') {
+                    setIsModelLoading(true);
+                    setLoadingProgress(0);
+                  } else if (model?.status?.value === 'loaded') {
+                    setIsModelLoading(false);
+                    setLoadingProgress(100);
+                  }
+                }
+              } else {
+                // 단일 모델 모드인 경우, /health가 200이면 로딩 완료로 간주
+                setIsModelLoading(false);
+                setLoadingProgress(100);
+              }
+            } catch (_e) {
+              // 단일 모델 모드인 경우, /health가 200이면 로딩 완료로 간주
+              setIsModelLoading(false);
+              setLoadingProgress(100);
+            }
+          }
+        }
+      } catch (_e) {
+        // 서버가 아직 시작되지 않았거나 연결 불가 - 무시
+      }
+    };
+    
+    // config가 로드된 후 서버 상태 확인
+    if (config?.activeModelId) {
+      // 약간의 지연을 두어 서버가 시작될 시간을 줌
+      const timer = setTimeout(() => {
+        checkServerLoadingStatus();
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [config?.activeModelId]);
 
   useEffect(() => {
     let isInitialLoad = true;
@@ -235,6 +312,22 @@ const Header = () => {
     };
 
     const handleServerLog = (event) => {
+      // progress 필드가 직접 전달된 경우 (MLX 서버의 type: "progress" 메시지)
+      if (event.detail && typeof event.detail === 'object' && 'progress' in event.detail) {
+        const progress = event.detail.progress;
+        if (typeof progress === 'number') {
+          setLoadingProgress(Math.min(100, Math.max(0, progress)));
+          setIsModelLoading(true);
+        }
+        // text 필드도 확인하여 로딩 완료 감지
+        const text = event.detail.text || '';
+        if (text.includes('Model loaded successfully') || text.includes('✅ Model loaded')) {
+          setLoadingProgress(100);
+          setIsModelLoading(false);
+        }
+        return;
+      }
+      
       const logMessage = typeof event.detail === 'string' ? event.detail : '';
       if (!logMessage) return;
       
@@ -246,12 +339,17 @@ const Header = () => {
         setIsModelLoading(true);
       }
       // 모델 로딩 완료 감지 - 프로그레스 바는 유지하되 100%로 설정
-      if (logMessage.includes('Model loaded successfully') || logMessage.includes('✅ Model loaded')) {
+      if (logMessage.includes('Model loaded successfully') || 
+          logMessage.includes('✅ Model loaded') ||
+          logMessage.includes('model loaded') ||
+          /model\s+loaded/i.test(logMessage)) {
         setLoadingProgress(100);
-        // 프로그레스 바를 사라지게 하지 않음
+        setIsModelLoading(false); // 로딩 완료
       }
-      // 모델 로딩 시작 감지
-      if (logMessage.includes('Loading model from') || logMessage.includes('Loading...')) {
+      // 모델 로딩 시작 감지 (GGUF: "loading model", MLX: "Loading model from" 등)
+      if (logMessage.includes('Loading model from') || 
+          logMessage.includes('Loading...') ||
+          /loading\s+model/i.test(logMessage)) {
         setIsModelLoading(true);
         if (!progressMatch) {
           setLoadingProgress(0);
