@@ -3,6 +3,52 @@ import { useLanguage } from '../contexts/LanguageContext';
 import './ModelForm.css';
 import { LLAMA_BASE_URL } from '../services/api';
 
+// LLAMA_FTYPE_NAME 매핑 (fileTypeId -> fileTypeName)
+// main.js의 LLAMA_FTYPE_NAME과 동일한 매핑 사용
+const LLAMA_FTYPE_NAME = {
+  0: 'ALL_F32',
+  1: 'MOSTLY_F16',
+  2: 'MOSTLY_Q4_0',
+  3: 'MOSTLY_Q4_1',
+  7: 'MOSTLY_Q8_0',
+  8: 'MOSTLY_Q5_0',
+  9: 'MOSTLY_Q5_1',
+  10: 'MOSTLY_Q2_K',
+  11: 'MOSTLY_Q3_K_S',
+  12: 'MOSTLY_Q3_K_M',
+  13: 'MOSTLY_Q3_K_L',
+  14: 'MOSTLY_Q4_K_S',
+  15: 'MOSTLY_Q4_K_M',
+  16: 'MOSTLY_Q5_K_S',
+  17: 'MOSTLY_Q5_K_M',
+  18: 'MOSTLY_Q6_K',
+  19: 'MOSTLY_IQ2_XXS',
+  20: 'MOSTLY_IQ2_XS',
+  21: 'MOSTLY_Q2_K_S',
+  22: 'MOSTLY_IQ3_XS',
+  23: 'MOSTLY_IQ3_XXS',
+  24: 'MOSTLY_IQ1_S',
+  25: 'MOSTLY_IQ4_NL',
+  26: 'MOSTLY_IQ3_S',
+  27: 'MOSTLY_IQ3_M',
+  28: 'MOSTLY_IQ2_S',
+  29: 'MOSTLY_IQ2_M',
+  30: 'MOSTLY_IQ4_XS',
+  31: 'MOSTLY_IQ1_M',
+  32: 'MOSTLY_BF16',
+  36: 'MOSTLY_TQ1_0',
+  37: 'MOSTLY_TQ2_0',
+  38: 'MOSTLY_MXFP4_MOE',
+};
+
+// fileTypeId를 fileTypeName으로 변환
+const getFileTypeNameFromId = (fileTypeId) => {
+  if (fileTypeId == null) return null;
+  // 비트 플래그 제거 (1024는 MOSTLY 플래그)
+  const baseId = fileTypeId & ~1024;
+  return LLAMA_FTYPE_NAME[baseId] || null;
+};
+
 // (Fallback) GGUF 모델 경로(파일명)를 기반으로 양자화 정보를 추정하는 헬퍼
 // NOTE: 기본은 GGUF 내부 메타데이터(헤더/KV/텐서 타입)를 직접 읽어 표시합니다.
 // 다만 파일 읽기 실패/권한 문제 등으로 메타데이터를 읽지 못할 때만 파일명 기반 추정을 사용합니다.
@@ -64,8 +110,10 @@ const buildQuantizationSummaryLines = (language, ggufInfo) => {
     lines.push(isKo ? `GGUF v${ggufInfo.ggufVersion}` : `GGUF v${ggufInfo.ggufVersion}`);
   }
 
-  if (ggufInfo.fileTypeName) {
-    lines.push(`general.file_type: ${ggufInfo.fileTypeName}`);
+  // fileTypeName이 없으면 fileTypeId에서 계산
+  const fileTypeName = ggufInfo.fileTypeName || (ggufInfo.fileTypeId != null ? getFileTypeNameFromId(ggufInfo.fileTypeId) : null);
+  if (fileTypeName) {
+    lines.push(`general.file_type: ${fileTypeName}`);
   }
 
   if (ggufInfo.qkv && (ggufInfo.qkv.q || ggufInfo.qkv.k || ggufInfo.qkv.v)) {
@@ -327,10 +375,20 @@ const ModelForm = ({ config, onChange }) => {
         }
 
         if (out.res.ok && out.info && out.info.ok) {
+          // 디버깅: ggufInfo 구조 확인
+          console.log('[ModelForm] GGUF Info received:', {
+            ok: out.info.ok,
+            fileTypeId: out.info.fileTypeId,
+            fileTypeName: out.info.fileTypeName,
+            computedFileTypeName: out.info.fileTypeId != null ? getFileTypeNameFromId(out.info.fileTypeId) : null,
+            tensorTypes: out.info.tensorTypes,
+            qkv: out.info.qkv,
+          });
           setGgufInfo(out.info);
           setPathCheck({ status: 'ok', message: t('settings.verifyPathOkGGUF') });
         } else {
           const msg = extractErrorMessage(out.info);
+          console.error('[ModelForm] GGUF Info failed:', { res: out.res, info: out.info, msg });
           setGgufInfo(null);
           setPathCheck({ status: 'error', message: msg || t('settings.verifyPathFailGGUF') });
         }
@@ -347,16 +405,19 @@ const ModelForm = ({ config, onChange }) => {
   // 양자화 정보: 1) GGUF 메타데이터 기반 (우선) 2) 파일명 추정 (fallback)
   const quantInfo = useMemo(() => {
     if (ggufInfo && ggufInfo.ok) {
-      // prefer general.file_type if present
-      if (ggufInfo.fileTypeName) {
-        const name = String(ggufInfo.fileTypeName);
+      // prefer general.file_type if present (fileTypeName 또는 fileTypeId에서 계산)
+      const fileTypeName = ggufInfo.fileTypeName || (ggufInfo.fileTypeId != null ? getFileTypeNameFromId(ggufInfo.fileTypeId) : null);
+      if (fileTypeName) {
+        const name = String(fileTypeName);
         const upper = name.toUpperCase();
-        if (upper.includes('F16')) return { type: 'FP16', detail: 'FP16' };
+        // MOSTLY_ 접두사 제거
+        const cleanName = name.replace(/^MOSTLY_/, '');
+        if (upper.includes('F16') && !upper.includes('BF16')) return { type: 'FP16', detail: 'FP16' };
         if (upper.includes('BF16')) return { type: 'BF16', detail: 'BF16' };
         const qMatch = upper.match(/Q([0-9])_([A-Z0-9_]+)/);
         if (qMatch) return { type: `${qMatch[1]}-bit`, detail: `Q${qMatch[1]}_${qMatch[2]}` };
-        // Fallback: show raw ftype name
-        return { type: 'Mixed', detail: name.replace(/^MOSTLY_/, '') };
+        // Fallback: show raw ftype name (MOSTLY_ 제거)
+        return { type: 'Mixed', detail: cleanName };
       }
 
       // fallback to tensor-type stats if file_type missing
@@ -370,14 +431,30 @@ const ModelForm = ({ config, onChange }) => {
         const top = sorted[0] || entries[0];
         const topType = top ? top[0] : '-';
         const m = String(topType).match(/^Q([0-9])_/);
-        if (m) return { type: `${m[1]}-bit`, detail: topType };
-        if (topType === 'F16') return { type: 'FP16', detail: 'FP16' };
-        if (topType === 'BF16') return { type: 'BF16', detail: 'BF16' };
-        return { type: 'Mixed', detail: topType };
+        if (m) {
+          const result = { type: `${m[1]}-bit`, detail: topType };
+          console.log('[ModelForm] quantInfo from tensorTypes:', result);
+          return result;
+        }
+        if (topType === 'F16') {
+          const result = { type: 'FP16', detail: 'FP16' };
+          console.log('[ModelForm] quantInfo from tensorTypes (F16):', result);
+          return result;
+        }
+        if (topType === 'BF16') {
+          const result = { type: 'BF16', detail: 'BF16' };
+          console.log('[ModelForm] quantInfo from tensorTypes (BF16):', result);
+          return result;
+        }
+        const result = { type: 'Mixed', detail: topType };
+        console.log('[ModelForm] quantInfo from tensorTypes (Mixed):', result);
+        return result;
       }
     }
 
-    return inferQuantizationFromPath(formData.modelPath);
+    const fallback = inferQuantizationFromPath(formData.modelPath);
+    console.log('[ModelForm] quantInfo fallback (from path):', fallback);
+    return fallback;
   }, [formData.modelPath, ggufInfo]);
 
   const quantSummaryLines = useMemo(
