@@ -55,8 +55,25 @@ const LogPanel = () => {
         // MLX 모델: WebSocket 사용
         // 서버가 준비되었는지 먼저 확인
         const checkAndConnect = async () => {
+          // 이미 연결 중이거나 열려있으면 재연결하지 않음
+          if (websocketRef.current && 
+              (websocketRef.current.readyState === WebSocket.CONNECTING || 
+               websocketRef.current.readyState === WebSocket.OPEN)) {
+            return;
+          }
+          
           try {
             const healthResponse = await fetch(`${serverUrl}/health`, { signal: AbortSignal.timeout(2000) });
+            
+            // 503 상태 코드는 서버가 로딩 중임을 의미
+            if (healthResponse.status === 503) {
+              // 서버가 로딩 중이면 잠시 후 재시도
+              if (!stopped) {
+                setTimeout(connect, 5000);
+              }
+              return;
+            }
+            
             if (healthResponse.ok) {
               const healthData = await healthResponse.json();
               // 서버가 ready 상태이거나 loading 상태일 때만 연결 시도
@@ -100,6 +117,7 @@ const LogPanel = () => {
                 };
 
                 ws.onclose = () => {
+                  websocketRef.current = null;
                   if (!stopped) {
                     setTimeout(connect, 5000);  // 재연결 간격 증가
                   }

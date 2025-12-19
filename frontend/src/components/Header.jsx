@@ -16,71 +16,125 @@ const Header = () => {
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [isModelLoading, setIsModelLoading] = useState(false);
 
-  // 페이지 로드 시 서버의 현재 로딩 상태 확인
+  // 페이지 로드 시 및 페이지 가시성 변경 시 서버의 현재 로딩 상태 확인
   useEffect(() => {
-    const checkServerLoadingStatus = async () => {
+    const checkServerLoadingStatus = async (retryCount = 0) => {
       try {
         const serverUrl = getActiveServerUrl();
         const modelFormat = getActiveModelFormat();
         
         if (!serverUrl || !config?.activeModelId) return;
         
-        const response = await fetch(`${serverUrl}/health`, {
-          method: 'GET',
-          signal: AbortSignal.timeout(2000),
-        });
-        
-        // MLX 서버의 경우
-        if (modelFormat === 'mlx') {
-          if (response.ok) {
-            const data = await response.json();
-            if (data.status === 'loading') {
-              setIsModelLoading(true);
-              setLoadingProgress(0); // 초기 상태는 0%
-            } else if (data.status === 'ready') {
-              setIsModelLoading(false);
-              setLoadingProgress(100); // 완료 상태
-            }
-          }
-        } else {
-          // GGUF 서버의 경우
-          // 503 상태 코드는 "Loading model"을 의미함
-          if (response.status === 503) {
-            setIsModelLoading(true);
-            setLoadingProgress(0);
-          } else if (response.ok) {
-            // 서버가 준비되었으면 /models 엔드포인트에서 모델 상태 확인 (router 모드인 경우)
-            try {
-              const modelsResponse = await fetch(`${serverUrl}/models`, {
-                signal: AbortSignal.timeout(2000),
-              });
-              if (modelsResponse.ok) {
-                const modelsData = await modelsResponse.json();
-                const activeModelId = config?.activeModelId;
-                if (activeModelId && modelsData.data) {
-                  const model = modelsData.data.find((m) => m.id === activeModelId);
-                  if (model?.status?.value === 'loading') {
-                    setIsModelLoading(true);
-                    setLoadingProgress(0);
-                  } else if (model?.status?.value === 'loaded') {
-                    setIsModelLoading(false);
-                    setLoadingProgress(100);
-                  }
-                }
+        // GGUF 서버의 경우 /loading-progress API 사용
+        if (modelFormat === 'gguf') {
+          try {
+            const progressResponse = await fetch(`${serverUrl}/loading-progress`, {
+              method: 'GET',
+              signal: AbortSignal.timeout(2000),
+            });
+            if (progressResponse.ok) {
+              const progressData = await progressResponse.json();
+              if (progressData.loading) {
+                setIsModelLoading(true);
+                setLoadingProgress(progressData.progress || 0);
               } else {
+                setIsModelLoading(false);
+                setLoadingProgress(progressData.progress || 100);
+              }
+              return; // 프로그레스 정보를 받았으면 종료
+            }
+          } catch (_e) {
+            // /loading-progress가 없으면 기존 방식 사용
+          }
+          
+          // 기존 방식: /health 및 /models 확인
+          try {
+            const response = await fetch(`${serverUrl}/health`, {
+              method: 'GET',
+              signal: AbortSignal.timeout(2000),
+            });
+            
+            // 503 상태 코드는 "Loading model"을 의미함
+            if (response.status === 503) {
+              setIsModelLoading(true);
+              setLoadingProgress(0);
+            } else if (response.ok) {
+              // 서버가 준비되었으면 /models 엔드포인트에서 모델 상태 확인 (router 모드인 경우)
+              try {
+                const modelsResponse = await fetch(`${serverUrl}/models`, {
+                  signal: AbortSignal.timeout(2000),
+                });
+                if (modelsResponse.ok) {
+                  const modelsData = await modelsResponse.json();
+                  const activeModelId = config?.activeModelId;
+                  if (activeModelId && modelsData.data) {
+                    const model = modelsData.data.find((m) => m.id === activeModelId);
+                    if (model?.status?.value === 'loading') {
+                      setIsModelLoading(true);
+                      setLoadingProgress(0);
+                    } else if (model?.status?.value === 'loaded') {
+                      setIsModelLoading(false);
+                      setLoadingProgress(100);
+                    }
+                  }
+                } else {
+                  // 단일 모델 모드인 경우, /health가 200이면 로딩 완료로 간주
+                  setIsModelLoading(false);
+                  setLoadingProgress(100);
+                }
+              } catch (_e) {
                 // 단일 모델 모드인 경우, /health가 200이면 로딩 완료로 간주
                 setIsModelLoading(false);
                 setLoadingProgress(100);
               }
-            } catch (_e) {
-              // 단일 모델 모드인 경우, /health가 200이면 로딩 완료로 간주
-              setIsModelLoading(false);
-              setLoadingProgress(100);
+            }
+          } catch (error) {
+            // 연결 실패 시 재시도 (최대 5회, 1초 간격)
+            if (retryCount < 5) {
+              setTimeout(() => {
+                checkServerLoadingStatus(retryCount + 1);
+              }, 1000);
+            }
+          }
+        } else {
+          // MLX 서버의 경우
+          try {
+            const response = await fetch(`${serverUrl}/health`, {
+              method: 'GET',
+              signal: AbortSignal.timeout(2000),
+            });
+            
+            // 503 상태 코드는 "Loading model"을 의미함
+            if (response.status === 503) {
+              setIsModelLoading(true);
+              setLoadingProgress(0); // 초기 상태는 0%
+            } else if (response.ok) {
+              const data = await response.json();
+              if (data.status === 'loading') {
+                setIsModelLoading(true);
+                // 서버에서 프로그레스 정보를 받으면 사용, 없으면 0%
+                setLoadingProgress(data.progress !== undefined ? data.progress : 0);
+              } else if (data.status === 'ready') {
+                setIsModelLoading(false);
+                setLoadingProgress(100); // 완료 상태
+              }
+            }
+          } catch (error) {
+            // 연결 실패 시 재시도 (최대 5회, 1초 간격)
+            if (retryCount < 5) {
+              setTimeout(() => {
+                checkServerLoadingStatus(retryCount + 1);
+              }, 1000);
             }
           }
         }
       } catch (_e) {
-        // 서버가 아직 시작되지 않았거나 연결 불가 - 무시
+        // 서버가 아직 시작되지 않았거나 연결 불가 - 재시도
+        if (retryCount < 5) {
+          setTimeout(() => {
+            checkServerLoadingStatus(retryCount + 1);
+          }, 1000);
+        }
       }
     };
     
@@ -90,7 +144,35 @@ const Header = () => {
       const timer = setTimeout(() => {
         checkServerLoadingStatus();
       }, 1000);
-      return () => clearTimeout(timer);
+      
+      // 페이지 가시성 변경 시 상태 확인 (다른 앱에서 돌아올 때)
+      const handleVisibilityChange = () => {
+        if (!document.hidden && config?.activeModelId) {
+          // 페이지가 다시 보일 때 서버 상태 확인 (서버가 시작될 시간을 줌)
+          setTimeout(() => {
+            checkServerLoadingStatus();
+          }, 1000);
+        }
+      };
+      
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      
+      // 포커스 이벤트도 처리 (일부 브라우저에서 더 잘 동작)
+      const handleFocus = () => {
+        if (config?.activeModelId) {
+          setTimeout(() => {
+            checkServerLoadingStatus();
+          }, 1000);
+        }
+      };
+      
+      window.addEventListener('focus', handleFocus);
+      
+      return () => {
+        clearTimeout(timer);
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        window.removeEventListener('focus', handleFocus);
+      };
     }
   }, [config?.activeModelId]);
 

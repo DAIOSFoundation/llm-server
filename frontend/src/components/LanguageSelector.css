@@ -17,7 +17,7 @@
 }
 
 .language-button:hover {
-  background-color: var(--secondary-color);
+  background-color: #333;
 }
 
 .language-flag {
@@ -28,10 +28,10 @@
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  background: var(--surface-color);
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius);
-  box-shadow: var(--box-shadow);
+  background-color: #333;
+  border: 1px solid #555;
+  border-radius: 5px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
   min-width: 150px;
   z-index: 1000;
   overflow: hidden;
@@ -51,11 +51,11 @@
 }
 
 .language-option:hover {
-  background-color: var(--secondary-color);
+  background-color: #2196F3;
 }
 
 .language-option.active {
-  background-color: var(--primary-color);
+  background-color: #4CAF50;
   color: white;
   font-weight: 500;
 }
@@ -66,6 +66,6 @@
 
 .language-name {
   font-size: 0.9rem;
-  color: var(--text-color);
+  color: #eee;
 }
 

@@ -49,6 +49,7 @@ processing = False
 request_queue = []
 log_websockets = []  # WebSocket 연결 리스트
 metrics_websockets = []  # WebSocket 연결 리스트
+loading_progress = 0.0  # 로딩 프로그레스 (0-100)
 
 # 메트릭 추적 변수
 tokens_generated = 0
@@ -104,7 +105,8 @@ async def lifespan(app: FastAPI):
     
     # 시작 시 모델 로드 (비동기로 실행하여 서버가 먼저 시작되도록)
     async def load_model_async():
-        global model, tokenizer, ready
+        global model, tokenizer, ready, loading_progress
+        loading_progress = 0.0  # 로딩 시작 시 초기화
         await broadcast_log_async(f"Loading model from {MODEL_PATH}...")
         try:
             # GPU 사용 보장
@@ -131,7 +133,7 @@ async def lifespan(app: FastAPI):
             
             # 모델 로딩을 별도 태스크로 실행 (진행률 모니터링 포함)
             async def load_with_progress():
-                global model, tokenizer
+                global model, tokenizer, loading_progress
                 loop = asyncio.get_event_loop()
                 
                 # 백그라운드에서 모델 로딩 시작
@@ -154,6 +156,7 @@ async def lifespan(app: FastAPI):
                         estimated_progress = min(95, (loaded_size / total_size) * 100)
                         if estimated_progress > last_loaded_size:
                             progress_steps += 1
+                            loading_progress = estimated_progress  # 전역 변수 업데이트
                             if progress_steps % 4 == 0:  # 2초마다 업데이트
                                 bar_length = 30
                                 filled = int(bar_length * estimated_progress / 100)
@@ -177,11 +180,13 @@ async def lifespan(app: FastAPI):
                 
                 # 모델 로딩 완료 대기
                 model, tokenizer = await load_task
+                loading_progress = 100.0  # 로딩 완료
             
             await load_with_progress()
             
             load_time = time.time() - load_start_time
             ready = True
+            loading_progress = 100.0  # 로딩 완료
             await broadcast_log_async("✅ Model loaded successfully")
             await broadcast_log_async(f"⏱️  Loading time: {load_time:.2f} seconds")
             broadcast_metrics()
@@ -191,6 +196,7 @@ async def lifespan(app: FastAPI):
             await broadcast_log_async(traceback.format_exc())
             # 모델 로딩 실패해도 서버는 계속 실행 (ready=False 상태)
             ready = False
+            loading_progress = 0.0  # 로딩 실패 시 초기화
     
     # 모델 로딩을 백그라운드에서 시작
     asyncio.create_task(load_model_async())
@@ -215,7 +221,11 @@ app.add_middleware(
 # Health check
 @app.get("/health")
 async def health():
-    return {"status": "ready" if ready else "loading", "engine": "python-mlx-lm-direct"}
+    global loading_progress
+    if ready:
+        return {"status": "ready", "progress": 100.0, "engine": "python-mlx-lm-direct"}
+    else:
+        return {"status": "loading", "progress": loading_progress, "engine": "python-mlx-lm-direct"}
 
 # Metrics endpoint
 @app.get("/metrics")
